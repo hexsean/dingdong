@@ -120,7 +120,7 @@ class Bot:
             )
         except Exception as exc:
             log.exception("intent handling failed")
-            reply = f"出错了：{exc}"
+            reply = "出错了，请稍后重试。"
         if reply:
             log.info("reply (%d chars): %s", len(reply), reply[:200])
             ok = self._client.safe_send_text(owner, reply, ctx)
@@ -134,7 +134,11 @@ class Bot:
     # ---------- feedback ----------
 
     def _send_status(self, user_id: str, context_token: str, text: str) -> None:
-        self._client.safe_send_text(user_id, text, context_token)
+        try:
+            self._client.send_text_partial(user_id, text, context_token)
+        except Exception:
+            log.debug("send_text_partial failed, falling back to send_text")
+            self._client.safe_send_text(user_id, text, context_token)
 
     def _show_typing(self, user_id: str, context_token: str) -> None:
         ticket = self._typing_tickets.get(user_id)
@@ -143,7 +147,9 @@ class Bot:
             if ticket:
                 self._typing_tickets[user_id] = ticket
         if ticket:
-            self._client.send_typing(user_id, ticket)
+            ok = self._client.send_typing(user_id, ticket)
+            if not ok:
+                self._typing_tickets.pop(user_id, None)
 
     # ---------- shutdown ----------
 

@@ -234,6 +234,9 @@ class IntentRouter:
             if name == "search_web":
                 return self._tool_search_web(args)
             return _err(f"未知工具 {name}")
+        except ValueError as exc:
+            log.warning("tool %s validation: %s", name, exc)
+            return _err(str(exc))
         except Exception as exc:
             log.exception("tool %s failed", name)
             return _err(str(exc))
@@ -290,12 +293,15 @@ class IntentRouter:
                 return _err(f"schedule_kind 须为 {sorted(VALID_SCHEDULE_KINDS)}")
             fields["schedule_kind"] = kind
             fields["schedule_value"] = _build_schedule_value(kind, args)
+        old_kind, old_val = job.schedule_kind, job.schedule_value
         updated = self._store.update_fields(job.id, **fields)
         if updated is None:
             return _err("更新失败")
         try:
             self._scheduler.sync_job(updated)
-        except ScheduleSpecError as exc:
+        except Exception as exc:
+            self._store.update_fields(job.id, schedule_kind=old_kind, schedule_value=old_val)
+            self._scheduler.sync_job(job)
             return _err(f"schedule invalid: {exc}")
         nr = self._scheduler.get_next_run(updated.id)
         return _ok({"updated": _job_to_brief(updated), "next_run_at": nr.isoformat() if nr else None,

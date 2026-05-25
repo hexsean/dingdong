@@ -36,7 +36,11 @@ PROVIDERS = [
 
 def _ask(prompt: str, default: str = "") -> str:
     hint = f" [{default}]" if default else ""
-    val = input(f"  {prompt}{hint}: ").strip()
+    try:
+        val = input(f"  {prompt}{hint}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  已取消。")
+        sys.exit(1)
     return val or default
 
 
@@ -68,7 +72,11 @@ def run_setup(data_dir: str = "./data", env_path: str = ".env") -> None:
     print()
 
     while True:
-        raw = input("  输入编号: ").strip()
+        try:
+            raw = input("  输入编号: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  已取消。")
+            sys.exit(1)
         if raw.isdigit() and 1 <= int(raw) <= len(PROVIDERS):
             provider = PROVIDERS[int(raw) - 1]
             break
