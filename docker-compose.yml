@@ -1,7 +1,6 @@
 services:
   dingdong:
     image: hexsean/dingdong:latest
-    build: .
     restart: unless-stopped
     volumes:
       - ./data:/app/data
