@@ -16,6 +16,7 @@ from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
 from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
 from .storage import Job, JobStore, VALID_SCHEDULE_KINDS, describe_schedule, new_job_id
+from .updater import set_disabled, is_disabled
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +213,12 @@ class IntentRouter:
             self._store.append_message(owner_user_id, "user", text)
             self._store.append_message(owner_user_id, "assistant", GREETING_REPLY)
             return GREETING_REPLY
+        if stripped == "关闭更新提醒":
+            set_disabled(self._store.db_path.parent, True)
+            return "已关闭更新提醒。发「开启更新提醒」可恢复。"
+        if stripped == "开启更新提醒":
+            set_disabled(self._store.db_path.parent, False)
+            return "已开启更新提醒。"
 
         shortcut = self._try_shortcut(stripped, owner_user_id)
         if shortcut is not None:

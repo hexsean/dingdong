@@ -25,6 +25,7 @@ from .login import ensure_login, load_session, save_session
 from .scheduler import Scheduler
 from .search import init_exa
 from .storage import JobStore
+from .updater import CHECK_ID, local_version, remote_version, is_disabled
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,8 @@ class Bot:
     def run(self) -> None:
         self._install_signal_handlers()
         self._scheduler.start()
-        log.info("bot is online; entering long-poll loop")
+        self._register_update_check()
+        log.info("v%s online; entering long-poll loop", local_version())
 
         session = load_session(self._cfg.session_path) or {}
         self._updates_buf = session.get("updates_buf", "")
@@ -170,6 +172,51 @@ class Bot:
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
         return stop
+
+    # ---------- update check ----------
+
+    def _register_update_check(self) -> None:
+        if is_disabled(self._cfg.data_dir):
+            log.info("update check disabled by user")
+            return
+        from apscheduler.triggers.interval import IntervalTrigger
+        self._scheduler._scheduler.add_job(
+            self._check_update,
+            trigger=IntervalTrigger(hours=24),
+            id=CHECK_ID,
+            replace_existing=True,
+            next_run_time=None,  # 不立即执行，等 24h
+        )
+        # 启动 30 秒后做一次首检
+        from apscheduler.triggers.date import DateTrigger
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(self._cfg.scheduler_tz)
+        self._scheduler._scheduler.add_job(
+            self._check_update,
+            trigger=DateTrigger(run_date=datetime.now(tz) + timedelta(seconds=30)),
+            id=f"{CHECK_ID}_init",
+        )
+
+    def _check_update(self) -> None:
+        if is_disabled(self._cfg.data_dir):
+            return
+        rv = remote_version()
+        lv = local_version()
+        if rv and rv != lv:
+            log.info("new version available: %s (current: %s)", rv, lv)
+            self._notify_update(lv, rv)
+
+    def _notify_update(self, current: str, latest: str) -> None:
+        msg = f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n更新：docker compose pull && docker compose up -d\n关闭提醒：发「关闭更新提醒」"
+        session = load_session(self._cfg.session_path) or {}
+        # 通知最近活跃的用户
+        jobs = self._store.list_jobs()
+        notified: set[str] = set()
+        for job in jobs:
+            if job.owner_user_id not in notified:
+                self._client.safe_send_text(job.owner_user_id, msg, job.context_token)
+                notified.add(job.owner_user_id)
 
     # ---------- shutdown ----------
 
