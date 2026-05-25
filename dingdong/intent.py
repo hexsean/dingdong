@@ -30,7 +30,12 @@ INTENT_SYSTEM_PROMPT = """\
 
 用工具管理任务。有 search_web 时可搜索。日常对话简短回。
 
-回复要求：直接给结果，不要开场白，不要总结，一句话能说完就不用两句。
+严格规则：
+- 用户说"删除"就只调 delete_job，不要先 list 再删，直接按名称或 id 删
+- 用户要删多个任务，用 job_ids 数组一次删完，或用 job_id="all" 全删
+- 用户问任务列表，只调 list_jobs，不要创建任何任务
+- 不要自作主张创建用户没要求的任务
+- 回复直接给结果，不要开场白，一句话说完
 
 用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；换绑/更新需在服务器操作。
 
@@ -235,7 +240,8 @@ class IntentRouter:
                 if tu["name"] == "search_web":
                     needs_llm_summary = True
 
-            if not needs_llm_summary and len(tool_uses) == 1:
+            QUICK_REPLY_TOOLS = {"create_job", "update_job"}
+            if not needs_llm_summary and len(tool_uses) == 1 and tool_uses[0]["name"] in QUICK_REPLY_TOOLS:
                 quick = _quick_reply(tool_uses[0]["name"], tool_results[0]["content"])
                 if quick:
                     self._store.append_message(owner_user_id, "assistant", quick)
@@ -256,7 +262,10 @@ class IntentRouter:
 
     # ---------- shortcuts (skip LLM entirely) ----------
 
-    _LIST_PATTERNS = {"我有哪些任务", "任务列表", "查看任务", "列出任务", "所有任务", "我的任务"}
+    _LIST_PATTERNS = {
+        "我有哪些任务", "任务列表", "查看任务", "列出任务", "所有任务",
+        "我的任务", "我的任务列表", "有什么任务", "看看任务", "任务",
+    }
 
     def _try_shortcut(self, text: str, owner_user_id: str) -> str | None:
         if text in self._LIST_PATTERNS:
