@@ -13,7 +13,6 @@ read -p "确认提交并推送? [y/N] " confirm
 git add -A
 git commit -m "$MSG"
 git push
-docker build -t hexsean/dingdong:latest .
-docker push hexsean/dingdong:latest
+docker buildx build --platform linux/amd64,linux/arm64 -t hexsean/dingdong:latest --push .
 
 echo "✓ done"
