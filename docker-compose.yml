@@ -1,9 +1,12 @@
 services:
   dingdong:
+    image: hexsean/dingdong:latest
     build: .
     restart: unless-stopped
     volumes:
       - ./data:/app/data
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     tty: true
     stdin_open: true
