@@ -53,3 +53,22 @@ def search(query: str, num_results: int = 5) -> str:
     except Exception as exc:
         log.exception("Exa search failed")
         return f"搜索出错：{exc}"
+
+
+def read_url(url: str) -> str:
+    if _exa_client is None:
+        return "搜索不可用（EXA_API_KEY 未配置）"
+    try:
+        result = _exa_client.get_contents(
+            url,
+            text={"max_characters": 5000},
+        )
+        if not result.results:
+            return f"无法获取 {url} 的内容。"
+        r = result.results[0]
+        title = r.title or ""
+        text = (r.text or "")[:5000].strip()
+        return f"{title}\n{url}\n\n{text}"
+    except Exception as exc:
+        log.exception("Exa get_contents failed")
+        return f"获取页面失败：{exc}"

@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
-from .search import is_available as search_available, search as exa_search
+from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
 from .storage import Job, JobStore, VALID_SCHEDULE_KINDS, describe_schedule, new_job_id
 
 log = logging.getLogger(__name__)
@@ -35,7 +35,8 @@ INTENT_SYSTEM_PROMPT = """\
 - 用户要删多个任务，用 job_ids 数组一次删完，或用 job_id="all" 全删
 - 用户问任务列表，只调 list_jobs，不要创建任何任务
 - 不要自作主张创建用户没要求的任务
-- 回复直接给结果，不要开场白，一句话说完
+- 任务操作回复直接给结果，一句话说完
+- 搜索结果要详细展示：列出要点、来源，不要过度压缩。可用 read_url 获取页面详情后再总结
 
 用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；换绑/更新需在服务器操作。
 
@@ -148,23 +149,36 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
 ]
 
-SEARCH_TOOL_SPEC = ToolSpec(
-    name="search_web",
-    description="搜索互联网获取实时信息。",
-    input_schema={
-        "type": "object", "required": ["query"],
-        "properties": {
-            "query": {"type": "string"},
-            "num_results": {"type": "integer", "minimum": 1, "maximum": 10},
+SEARCH_TOOL_SPECS = [
+    ToolSpec(
+        name="search_web",
+        description="搜索互联网，返回多条结果摘要（标题+URL+摘要）。用于发现信息。",
+        input_schema={
+            "type": "object", "required": ["query"],
+            "properties": {
+                "query": {"type": "string"},
+                "num_results": {"type": "integer", "minimum": 1, "maximum": 10},
+            },
+            "additionalProperties": False,
         },
-        "additionalProperties": False,
-    },
-)
+    ),
+    ToolSpec(
+        name="read_url",
+        description="读取指定 URL 的页面正文（最多 5000 字符）。用于获取搜索结果中某个页面的详细内容。",
+        input_schema={
+            "type": "object", "required": ["url"],
+            "properties": {"url": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    ),
+]
 
 
 def _tool_status(name: str, args: dict[str, Any]) -> str | None:
     if name == "search_web":
         return f"搜索「{args.get('query', '')}」..."
+    if name == "read_url":
+        return f"读取页面..."
     if name == "create_job":
         return f"创建「{args.get('name', '任务')}」..."
     return None
@@ -214,7 +228,7 @@ class IntentRouter:
         for round_idx in range(MAX_TOOL_ROUNDS):
             tools = list(TOOL_SPECS)
             if search_available():
-                tools.append(SEARCH_TOOL_SPEC)
+                tools.extend(SEARCH_TOOL_SPECS)
             resp = self._llm.chat(
                 system=self._system_prompt(),
                 messages=messages,
@@ -247,7 +261,7 @@ class IntentRouter:
                     context_token=context_token,
                 )
                 tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": result_text})
-                if tu["name"] == "search_web":
+                if tu["name"] in ("search_web", "read_url"):
                     needs_llm_summary = True
 
             QUICK_REPLY_TOOLS = {"create_job", "update_job"}
@@ -301,6 +315,8 @@ class IntentRouter:
                 return self._tool_run_now(args, owner_user_id)
             if name == "search_web":
                 return self._tool_search_web(args)
+            if name == "read_url":
+                return self._tool_read_url(args)
             return _err(f"未知工具 {name}")
         except ValueError as exc:
             log.warning("tool %s validation: %s", name, exc)
@@ -432,6 +448,12 @@ class IntentRouter:
         if not query:
             return _err("query is required")
         return exa_search(query, num_results=min(int(args.get("num_results", 5)), 10))
+
+    def _tool_read_url(self, args: dict[str, Any]) -> str:
+        url = str(args.get("url", "")).strip()
+        if not url:
+            return _err("url is required")
+        return exa_read_url(url)
 
     def _resolve_job(self, raw_id: str, owner_user_id: str) -> Job | None:
         raw_id = (raw_id or "").strip()
