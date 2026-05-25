@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .ilink import ILinkClient
 from .llm import LLMProvider
@@ -28,10 +29,12 @@ class JobExecutor:
         llm: LLMProvider,
         client: ILinkClient,
         store: JobStore,
+        tz: str = "Asia/Shanghai",
     ) -> None:
         self._llm = llm
         self._client = client
         self._store = store
+        self._tz = ZoneInfo(tz)
 
     def run(self, job: Job) -> None:
         log.info("executing job %s (%s)", job.id, job.name)
@@ -49,7 +52,7 @@ class JobExecutor:
         self._store.record_run(job.id, f"{status}: {content[:400]}")
 
     def _generate(self, job: Job) -> str:
-        now = datetime.now().astimezone()
+        now = datetime.now(self._tz)
         user_prompt = (
             f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
             f"任务名称：{job.name}\n"

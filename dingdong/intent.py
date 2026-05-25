@@ -10,6 +10,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
@@ -246,8 +247,11 @@ class IntentRouter:
         self._store.append_message(owner_user_id, "assistant", fallback)
         return fallback
 
+    def _tz(self) -> ZoneInfo:
+        return ZoneInfo(self._scheduler.tz)
+
     def _system_prompt(self) -> str:
-        now = datetime.now().astimezone()
+        now = datetime.now(self._tz())
         return INTENT_SYSTEM_PROMPT + f"\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
 
     # ---------- shortcuts (skip LLM entirely) ----------
@@ -265,7 +269,7 @@ class IntentRouter:
     def _execute_tool(self, *, name: str, args: dict[str, Any], owner_user_id: str, context_token: str) -> str:
         try:
             if name == "get_current_time":
-                now = datetime.now().astimezone()
+                now = datetime.now(self._tz())
                 return now.strftime("%Y-%m-%d %H:%M:%S %Z (星期%w)").replace("星期0","星期日").replace("星期1","星期一").replace("星期2","星期二").replace("星期3","星期三").replace("星期4","星期四").replace("星期5","星期五").replace("星期6","星期六")
             if name == "list_jobs":
                 return self._tool_list_jobs(owner_user_id)
@@ -448,18 +452,7 @@ def _quick_reply(tool_name: str, result_json: str) -> str | None:
     if tool_name == "run_now":
         return f"已触发「{r.get('queued_name', '')}」。"
 
-    if tool_name == "list_jobs":
-        jobs = r.get("jobs", [])
-        if not jobs:
-            return "当前没有任务。"
-        lines = []
-        for j in jobs:
-            enabled = "✓" if j.get("enabled") else "⏸"
-            lines.append(f"{enabled} [{j['id'][:8]}] {j.get('name','')} · {describe_schedule(j.get('schedule_kind',''), j.get('schedule_value',{}))} · {j.get('goal','')}")
-        return "\n".join(lines)
-
-    if tool_name == "get_current_time":
-        return None
+    # list_jobs / get_current_time 是只读查询，可能是多步操作的前置步骤，不拦截
 
     return None
 

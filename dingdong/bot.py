@@ -49,7 +49,7 @@ class Bot:
             qrcode_png_path=cfg.qrcode_png_path,
             client_factory=factory,
         )
-        self._executor = JobExecutor(self._llm, self._client, self._store)
+        self._executor = JobExecutor(self._llm, self._client, self._store, tz=cfg.scheduler_tz)
         self._scheduler = Scheduler(self._store, self._executor.run, cfg.scheduler_tz)
         self._intent = IntentRouter(self._llm, self._store, self._scheduler, history_limit=cfg.history_limit)
         self._intent.set_callbacks(
