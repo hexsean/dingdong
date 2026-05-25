@@ -119,7 +119,8 @@ class Bot:
             )
         except Exception as exc:
             log.exception("intent handling failed")
-            reply = "出错了，请稍后重试。"
+            err_msg = str(exc)[:100]
+            reply = f"出错了：{err_msg}" if log.isEnabledFor(logging.DEBUG) else "出错了，请稍后重试。"
         typing_stop.set()
         if reply:
             log.info("reply (%d chars): %s", len(reply), reply[:200])
