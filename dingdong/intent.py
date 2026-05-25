@@ -50,6 +50,11 @@ def _job_to_brief(job: Job) -> dict[str, Any]:
 
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
+        name="get_current_time",
+        description="获取当前日期和时间。",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    ToolSpec(
         name="list_jobs",
         description="列出当前用户的所有定时任务。",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
@@ -128,13 +133,18 @@ SEARCH_TOOL_SPEC = ToolSpec(
 )
 
 
-TOOL_STATUS = {
-    "search_web": "搜索中...",
-    "create_job": "创建任务...",
-    "update_job": "更新任务...",
-    "delete_job": "删除任务...",
-    "run_now": "触发任务...",
-}
+def _tool_status(name: str, args: dict[str, Any]) -> str | None:
+    if name == "search_web":
+        return f"搜索「{args.get('query', '')}」..."
+    if name == "create_job":
+        return f"创建「{args.get('name', '任务')}」..."
+    if name == "update_job":
+        return f"更新「{args.get('job_id', '')[:8]}」..."
+    if name == "delete_job":
+        return f"删除「{args.get('job_id', '')[:8]}」..."
+    if name == "run_now":
+        return f"触发「{args.get('job_id', '')[:8]}」..."
+    return None
 
 
 class IntentRouter:
@@ -184,11 +194,10 @@ class IntentRouter:
                 self._store.append_message(owner_user_id, "assistant", reply)
                 return reply
 
-            # 发送中间状态给用户
             if self._on_status:
-                status_parts = [TOOL_STATUS[tu["name"]] for tu in tool_uses if tu["name"] in TOOL_STATUS]
-                if status_parts:
-                    self._on_status(owner_user_id, context_token, " ".join(status_parts))
+                parts = [s for tu in tool_uses if (s := _tool_status(tu["name"], tu.get("input") or {}))]
+                if parts:
+                    self._on_status(owner_user_id, context_token, " ".join(parts))
 
             tool_results = []
             for tu in tool_uses:
@@ -213,6 +222,9 @@ class IntentRouter:
 
     def _execute_tool(self, *, name: str, args: dict[str, Any], owner_user_id: str, context_token: str) -> str:
         try:
+            if name == "get_current_time":
+                now = datetime.now().astimezone()
+                return now.strftime("%Y-%m-%d %H:%M:%S %Z (星期%w)").replace("星期0","星期日").replace("星期1","星期一").replace("星期2","星期二").replace("星期3","星期三").replace("星期4","星期四").replace("星期5","星期五").replace("星期6","星期六")
             if name == "list_jobs":
                 return self._tool_list_jobs(owner_user_id)
             if name == "create_job":
