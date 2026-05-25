@@ -12,7 +12,7 @@ read -p "确认提交并推送? [y/N] " confirm
 
 git add -A
 git commit -m "$MSG"
-git push
+https_proxy="" http_proxy="" all_proxy="" git push
 docker build -t hexsean/dingdong:latest .
 docker push hexsean/dingdong:latest
 
