@@ -262,13 +262,17 @@ class IntentRouter:
 
     # ---------- shortcuts (skip LLM entirely) ----------
 
-    _LIST_PATTERNS = {
-        "我有哪些任务", "任务列表", "查看任务", "列出任务", "所有任务",
-        "我的任务", "我的任务列表", "有什么任务", "看看任务", "任务",
-    }
+    @staticmethod
+    def _is_list_intent(text: str) -> bool:
+        if "任务" not in text:
+            return False
+        for kw in ("列表", "查看", "有哪些", "看看", "列出", "所有", "多少", "几个", "哪些"):
+            if kw in text:
+                return True
+        return False
 
     def _try_shortcut(self, text: str, owner_user_id: str) -> str | None:
-        if text in self._LIST_PATTERNS:
+        if self._is_list_intent(text):
             result = self._tool_list_jobs(owner_user_id)
             return _quick_reply("list_jobs", result)
         return None
