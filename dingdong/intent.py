@@ -21,31 +21,24 @@ log = logging.getLogger(__name__)
 MAX_TOOL_ROUNDS = 6
 
 CLEAR_KEYWORDS = {"清空对话", "新对话", "重置对话", "清除历史"}
+GREETING_KEYWORDS = {"你好", "hi", "hello", "hey", "嗨", "在吗", "在不在", "你在吗"}
+GREETING_REPLY = "在的，有什么需要帮忙的？"
 
 INTENT_SYSTEM_PROMPT = """\
-你是叮咚，一个微信里的定时任务助手。
+你是叮咚，微信定时任务助手。极简回复，不废话。
 
-能力：
-- 定时任务：创建/修改/删除/暂停/立即执行，支持 cron、间隔、一次性
-- 联网搜索：有 search_web 工具时可查实时信息
-- 日常对话：正常友好回复
+用工具管理任务。有 search_web 时可搜索。日常对话简短回。
 
-用户指南（用户问到时告知）：
-- 发"清空对话"可重置对话记录
-- 任务到点时会自动推送消息，内容由 AI 根据目标生成
-- 支持自然语言设定时间，如"每天9点""每周一""2小时后""每隔30分钟"
-- 发"我有哪些任务"可查看所有任务
-- 换绑微信：需要在服务器上执行 docker compose run --rm dingdong logout 再 docker compose run --rm dingdong setup
+回复要求：直接给结果，不要开场白，不要总结，一句话能说完就不用两句。
 
-任务字段：
-- name: 任务名
-- goal: 触发时要做什么（自然语言描述）
-- schedule: cron("0 9 * * *") / interval(seconds/minutes/hours等) / date("YYYY-MM-DD HH:MM:SS")
+用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；换绑/更新需在服务器操作。
 
-规则：
-- 相对时间结合当前时间转绝对值，本地时区
-- 操作后一句话确认
-- 列任务格式：[id前8位] name · 计划 · 目标
+任务字段：name(名称) goal(目标描述) schedule_kind(cron/interval/date)
+- cron: cron_expression 5字段
+- interval: seconds/minutes/hours/days/weeks
+- date: run_at "YYYY-MM-DD HH:MM:SS"
+
+相对时间转绝对值，本地时区。
 """
 
 
@@ -165,9 +158,20 @@ class IntentRouter:
         self._on_status = on_status
 
     def handle(self, *, owner_user_id: str, context_token: str, text: str) -> str:
-        if text.strip() in CLEAR_KEYWORDS:
+        stripped = text.strip()
+        if stripped in CLEAR_KEYWORDS:
             n = self._store.clear_history(owner_user_id)
             return f"已清空对话记录（{n} 条）。"
+        if stripped.lower() in GREETING_KEYWORDS:
+            self._store.append_message(owner_user_id, "user", text)
+            self._store.append_message(owner_user_id, "assistant", GREETING_REPLY)
+            return GREETING_REPLY
+
+        shortcut = self._try_shortcut(stripped, owner_user_id)
+        if shortcut is not None:
+            self._store.append_message(owner_user_id, "user", text)
+            self._store.append_message(owner_user_id, "assistant", shortcut)
+            return shortcut
 
         self._store.append_message(owner_user_id, "user", text)
         history = self._store.get_history(owner_user_id, limit=self._history_limit)
@@ -232,6 +236,16 @@ class IntentRouter:
     def _system_prompt(self) -> str:
         now = datetime.now().astimezone()
         return INTENT_SYSTEM_PROMPT + f"\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+
+    # ---------- shortcuts (skip LLM entirely) ----------
+
+    _LIST_PATTERNS = {"我有哪些任务", "任务列表", "查看任务", "列出任务", "所有任务", "我的任务"}
+
+    def _try_shortcut(self, text: str, owner_user_id: str) -> str | None:
+        if text in self._LIST_PATTERNS:
+            result = self._tool_list_jobs(owner_user_id)
+            return _quick_reply("list_jobs", result)
+        return None
 
     # ---------- tools ----------
 

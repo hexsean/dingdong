@@ -47,6 +47,12 @@ docker compose up -d
 Docker: `docker compose run --rm dingdong <命令>`
 本地: `python main.py <命令>`
 
+## 更新
+
+```bash
+docker compose pull && docker compose up -d
+```
+
 ## License
 
 MIT
