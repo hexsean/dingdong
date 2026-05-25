@@ -108,7 +108,5 @@ def run_setup(data_dir: str = "./data", env_path: str = ".env") -> None:
     print()
     print("  ✓ 配置完成！")
     print()
-    print("  启动方式：")
-    print("    python -m dingdong start")
-    print("    docker compose up -d")
+    print("  启动：docker compose up -d")
     print()
