@@ -72,7 +72,7 @@ class Scheduler:
         self.tz = tz
         self._scheduler = BackgroundScheduler(
             timezone=tz,
-            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60},
+            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300},
         )
 
     def start(self) -> None:
