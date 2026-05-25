@@ -129,13 +129,11 @@ SEARCH_TOOL_SPEC = ToolSpec(
 
 
 TOOL_STATUS = {
-    "list_jobs": "查看任务...",
+    "search_web": "搜索中...",
     "create_job": "创建任务...",
     "update_job": "更新任务...",
     "delete_job": "删除任务...",
-    "set_enabled": "更新任务...",
     "run_now": "触发任务...",
-    "search_web": "搜索中...",
 }
 
 
@@ -145,11 +143,13 @@ class IntentRouter:
         self._store = store
         self._scheduler = scheduler
         self._history_limit = history_limit
-        self._on_thinking: Any = None
+        self._on_typing = None
+        self._on_status = None
 
-    def set_thinking_callback(self, cb) -> None:
-        """设置回调：cb(owner_user_id, context_token) 在每轮 LLM 调用前触发，用于刷新 typing。"""
-        self._on_thinking = cb
+    def set_callbacks(self, *, on_typing=None, on_status=None) -> None:
+        """on_typing(owner, ctx): 刷新输入中状态。on_status(owner, ctx, text): 发送中间状态消息。"""
+        self._on_typing = on_typing
+        self._on_status = on_status
 
     def handle(self, *, owner_user_id: str, context_token: str, text: str) -> str:
         if text.strip() in CLEAR_KEYWORDS:
@@ -161,8 +161,8 @@ class IntentRouter:
 
         messages: list[dict[str, Any]] = list(history)
         for round_idx in range(MAX_TOOL_ROUNDS):
-            if self._on_thinking:
-                self._on_thinking(owner_user_id, context_token)
+            if self._on_typing:
+                self._on_typing(owner_user_id, context_token)
 
             tools = list(TOOL_SPECS)
             if search_available():
@@ -183,6 +183,12 @@ class IntentRouter:
                 reply = resp.text() or "好的。"
                 self._store.append_message(owner_user_id, "assistant", reply)
                 return reply
+
+            # 发送中间状态给用户
+            if self._on_status:
+                status_parts = [TOOL_STATUS[tu["name"]] for tu in tool_uses if tu["name"] in TOOL_STATUS]
+                if status_parts:
+                    self._on_status(owner_user_id, context_token, " ".join(status_parts))
 
             tool_results = []
             for tu in tool_uses:

@@ -52,7 +52,10 @@ class Bot:
         self._executor = JobExecutor(self._llm, self._client, self._store)
         self._scheduler = Scheduler(self._store, self._executor.run, cfg.scheduler_tz)
         self._intent = IntentRouter(self._llm, self._store, self._scheduler, history_limit=cfg.history_limit)
-        self._intent.set_thinking_callback(self._show_typing)
+        self._intent.set_callbacks(
+            on_typing=self._show_typing,
+            on_status=self._send_status,
+        )
 
     def run(self) -> None:
         self._install_signal_handlers()
@@ -128,7 +131,10 @@ class Bot:
         else:
             log.warning("intent returned empty reply")
 
-    # ---------- typing ----------
+    # ---------- feedback ----------
+
+    def _send_status(self, user_id: str, context_token: str, text: str) -> None:
+        self._client.safe_send_text(user_id, text, context_token)
 
     def _show_typing(self, user_id: str, context_token: str) -> None:
         ticket = self._typing_tickets.get(user_id)
