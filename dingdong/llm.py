@@ -114,6 +114,7 @@ class OpenAIProvider:
             raise ValueError("OPENAI_API_KEY is empty")
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
+        self._is_deepseek = "deepseek" in base_url.lower()
 
     def _to_openai_messages(
         self, system: str, messages: list[dict[str, Any]]
@@ -153,7 +154,10 @@ class OpenAIProvider:
                     )
             if role == "assistant":
                 msg_out: dict[str, Any] = {"role": "assistant"}
-                msg_out["content"] = "\n".join(text_parts) if text_parts else None
+                text_content = "\n".join(text_parts) if text_parts else None
+                if tool_calls and not text_content:
+                    text_content = ""
+                msg_out["content"] = text_content
                 if tool_calls:
                     msg_out["tool_calls"] = tool_calls
                 rc = msg.get("reasoning_content")
@@ -191,6 +195,9 @@ class OpenAIProvider:
                 }
                 for t in tools
             ]
+        if self._is_deepseek:
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+            kwargs["reasoning_effort"] = "low"
         resp = self._client.chat.completions.create(**kwargs)
         choice = resp.choices[0]
         msg = choice.message
