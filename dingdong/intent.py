@@ -138,12 +138,6 @@ def _tool_status(name: str, args: dict[str, Any]) -> str | None:
         return f"搜索「{args.get('query', '')}」..."
     if name == "create_job":
         return f"创建「{args.get('name', '任务')}」..."
-    if name == "update_job":
-        return f"更新「{args.get('job_id', '')[:8]}」..."
-    if name == "delete_job":
-        return f"删除「{args.get('job_id', '')[:8]}」..."
-    if name == "run_now":
-        return f"触发「{args.get('job_id', '')[:8]}」..."
     return None
 
 
