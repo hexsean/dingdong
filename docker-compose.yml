@@ -1,0 +1,9 @@
+services:
+  dingdong:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    env_file: .env
+    tty: true
+    stdin_open: true

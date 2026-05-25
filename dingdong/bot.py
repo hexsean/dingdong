@@ -1,0 +1,165 @@
+"""消息分发主循环。
+
+启动顺序：
+1. 加载配置 → 初始化 store / LLM。
+2. 通过 ``ensure_login`` 拿到带 token 的 ILinkClient。
+3. 启动 APScheduler 并加载历史 jobs。
+4. 进入长轮询：getupdates → 路由给 IntentRouter → send_text 回复。
+"""
+
+from __future__ import annotations
+
+import logging
+import signal
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+from .config import Config
+from .executor import JobExecutor
+from .ilink import ILinkClient, ILinkError
+from .intent import IntentRouter
+from .llm import build_provider
+from .login import ensure_login, load_session, save_session
+from .scheduler import Scheduler
+from .search import init_exa
+from .storage import JobStore
+
+log = logging.getLogger(__name__)
+
+
+class Bot:
+    def __init__(self, cfg: Config) -> None:
+        self._cfg = cfg
+        self._store = JobStore(cfg.db_path)
+        self._llm = build_provider(cfg)
+        init_exa(cfg.exa_api_key)
+        self._stop = threading.Event()
+        self._typing_tickets: dict[str, str] = {}
+
+        def factory(token: str | None) -> ILinkClient:
+            return ILinkClient(
+                bot_token=token,
+                long_poll_timeout_ms=cfg.long_poll_timeout_ms,
+            )
+
+        self._client = ensure_login(
+            session_path=cfg.session_path,
+            qrcode_png_path=cfg.qrcode_png_path,
+            client_factory=factory,
+        )
+        self._executor = JobExecutor(self._llm, self._client, self._store)
+        self._scheduler = Scheduler(self._store, self._executor.run, cfg.scheduler_tz)
+        self._intent = IntentRouter(self._llm, self._store, self._scheduler, history_limit=cfg.history_limit)
+
+    def run(self) -> None:
+        self._install_signal_handlers()
+        self._scheduler.start()
+        log.info("bot is online; entering long-poll loop")
+
+        session = load_session(self._cfg.session_path) or {}
+        self._updates_buf = session.get("updates_buf", "")
+
+        poll = threading.Thread(target=self._poll_loop, daemon=True, name="poll")
+        poll.start()
+        self._stop.wait()
+        self._shutdown()
+
+    # ---------- main loop ----------
+
+    def _poll_loop(self) -> None:
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                msgs, new_buf = self._client.get_updates(self._updates_buf)
+                if new_buf != self._updates_buf:
+                    self._updates_buf = new_buf
+                    self._persist_updates_buf(new_buf)
+                for m in msgs:
+                    if not m.is_user_message:
+                        continue
+                    self._handle_message(m)
+                backoff = 1.0
+            except ILinkError as exc:
+                if self._stop.is_set():
+                    break
+                log.warning("long-poll error: %s; sleeping %.1fs", exc, backoff)
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, 30.0)
+            except Exception:
+                if self._stop.is_set():
+                    break
+                log.exception("unexpected error in main loop")
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, 30.0)
+
+    def _handle_message(self, msg: Any) -> None:
+        text = (msg.text or "").strip()
+        if not text:
+            return
+        owner = msg.from_user_id
+        ctx = msg.context_token
+
+        if self._cfg.allowed_user_ids and owner not in self._cfg.allowed_user_ids:
+            log.info("rejecting message from %s (not in whitelist)", owner)
+            self._client.safe_send_text(owner, "你不在该 bot 的允许列表中。", ctx)
+            return
+
+        log.info("inbound from %s: %s", owner, text[:120])
+        self._show_typing(owner, ctx)
+        try:
+            reply = self._intent.handle(
+                owner_user_id=owner,
+                context_token=ctx,
+                text=text,
+            )
+        except Exception as exc:
+            log.exception("intent handling failed")
+            reply = f"出错了：{exc}"
+        if reply:
+            log.info("reply (%d chars): %s", len(reply), reply[:200])
+            ok = self._client.safe_send_text(owner, reply, ctx)
+            if ok:
+                log.info("reply sent successfully")
+            else:
+                log.error("reply send FAILED after retries")
+        else:
+            log.warning("intent returned empty reply")
+
+    # ---------- typing ----------
+
+    def _show_typing(self, user_id: str, context_token: str) -> None:
+        ticket = self._typing_tickets.get(user_id)
+        if not ticket:
+            ticket = self._client.get_typing_ticket(user_id, context_token)
+            if ticket:
+                self._typing_tickets[user_id] = ticket
+        if ticket:
+            self._client.send_typing(user_id, ticket)
+
+    # ---------- shutdown ----------
+
+    def _install_signal_handlers(self) -> None:
+        def _handle(signum, _frame):
+            log.info("received signal %s; shutting down", signum)
+            self._stop.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _handle)
+            except ValueError:
+                pass
+
+    def _shutdown(self) -> None:
+        log.info("scheduler stopping...")
+        self._scheduler.stop()
+        self._store.close()
+        log.info("bye")
+
+    def _persist_updates_buf(self, updates_buf: str) -> None:
+        session = load_session(self._cfg.session_path) or {}
+        if session.get("updates_buf") == updates_buf:
+            return
+        session["updates_buf"] = updates_buf
+        save_session(self._cfg.session_path, session)
