@@ -16,7 +16,7 @@ from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
 from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
 from .storage import Job, JobStore, VALID_SCHEDULE_KINDS, describe_schedule, new_job_id
-from .updater import set_disabled, is_disabled
+from .updater import set_disabled, is_disabled, local_version, remote_version
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ INTENT_SYSTEM_PROMPT = """\
 - 任务操作回复直接给结果，一句话说完
 - 搜索结果要详细展示：列出要点、来源，不要过度压缩。可用 read_url 获取页面详情后再总结
 
-用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；换绑/更新需在服务器操作。
+用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；发"检查更新"查看版本；换绑需在服务器操作。
 
 任务字段：name(名称) goal(目标描述) schedule_kind(cron/interval/date)
 - cron: cron_expression 5字段
@@ -219,6 +219,14 @@ class IntentRouter:
         if stripped == "开启更新提醒":
             set_disabled(self._store.db_path.parent, False)
             return "已开启更新提醒。"
+        if stripped in {"检查更新", "版本", "当前版本"}:
+            lv = local_version()
+            rv = remote_version()
+            if rv is None:
+                return f"当前版本 v{lv}，无法连接更新服务器。"
+            if rv != lv:
+                return f"当前版本 v{lv}，最新版本 v{rv}。\n更新：docker compose pull && docker compose up -d"
+            return f"当前版本 v{lv}，已是最新。"
 
         shortcut = self._try_shortcut(stripped, owner_user_id)
         if shortcut is not None:
@@ -287,7 +295,7 @@ class IntentRouter:
 
     def _system_prompt(self) -> str:
         now = datetime.now(self._tz())
-        return INTENT_SYSTEM_PROMPT + f"\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        return INTENT_SYSTEM_PROMPT + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
 
     # ---------- shortcuts (skip LLM entirely,仅精确匹配) ----------
 
