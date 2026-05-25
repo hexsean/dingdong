@@ -53,7 +53,6 @@ class Bot:
         self._scheduler = Scheduler(self._store, self._executor.run, cfg.scheduler_tz)
         self._intent = IntentRouter(self._llm, self._store, self._scheduler, history_limit=cfg.history_limit)
         self._intent.set_callbacks(
-            on_typing=self._show_typing,
             on_status=self._send_status,
         )
 
@@ -111,7 +110,7 @@ class Bot:
             return
 
         log.info("inbound from %s: %s", owner, text[:120])
-        self._show_typing(owner, ctx)
+        typing_stop = self._start_typing_loop(owner, ctx)
         try:
             reply = self._intent.handle(
                 owner_user_id=owner,
@@ -121,6 +120,8 @@ class Bot:
         except Exception as exc:
             log.exception("intent handling failed")
             reply = "出错了，请稍后重试。"
+        finally:
+            typing_stop.set()
         if reply:
             log.info("reply (%d chars): %s", len(reply), reply[:200])
             ok = self._client.safe_send_text(owner, reply, ctx)
@@ -150,6 +151,19 @@ class Bot:
             ok = self._client.send_typing(user_id, ticket)
             if not ok:
                 self._typing_tickets.pop(user_id, None)
+
+    def _start_typing_loop(self, user_id: str, context_token: str) -> threading.Event:
+        """启动后台线程每 3 秒刷新 typing 状态，返回 stop event。"""
+        stop = threading.Event()
+
+        def _loop():
+            while not stop.wait(3.0):
+                self._show_typing(user_id, context_token)
+
+        self._show_typing(user_id, context_token)
+        t = threading.Thread(target=_loop, daemon=True)
+        t.start()
+        return stop
 
     # ---------- shutdown ----------
 

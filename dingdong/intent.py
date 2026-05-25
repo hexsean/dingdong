@@ -149,12 +149,9 @@ class IntentRouter:
         self._store = store
         self._scheduler = scheduler
         self._history_limit = history_limit
-        self._on_typing = None
         self._on_status = None
 
-    def set_callbacks(self, *, on_typing=None, on_status=None) -> None:
-        """on_typing(owner, ctx): 刷新输入中状态。on_status(owner, ctx, text): 发送中间状态消息。"""
-        self._on_typing = on_typing
+    def set_callbacks(self, *, on_status=None) -> None:
         self._on_status = on_status
 
     def handle(self, *, owner_user_id: str, context_token: str, text: str) -> str:
@@ -178,9 +175,6 @@ class IntentRouter:
 
         messages: list[dict[str, Any]] = list(history)
         for round_idx in range(MAX_TOOL_ROUNDS):
-            if self._on_typing:
-                self._on_typing(owner_user_id, context_token)
-
             tools = list(TOOL_SPECS)
             if search_available():
                 tools.append(SEARCH_TOOL_SPEC)
