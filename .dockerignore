@@ -1,0 +1,9 @@
+.env
+data/
+.venv/
+.git/
+.claude/
+__pycache__/
+*.pyc
+deploy.sh
+.DS_Store
