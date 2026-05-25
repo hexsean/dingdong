@@ -203,6 +203,7 @@ class IntentRouter:
                     self._on_status(owner_user_id, context_token, " ".join(parts))
 
             tool_results = []
+            needs_llm_summary = False
             for tu in tool_uses:
                 result_text = self._execute_tool(
                     name=tu["name"],
@@ -211,6 +212,17 @@ class IntentRouter:
                     context_token=context_token,
                 )
                 tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": result_text})
+                if tu["name"] == "search_web":
+                    needs_llm_summary = True
+
+            if not needs_llm_summary and len(tool_uses) == 1:
+                quick = _quick_reply(tool_uses[0]["name"], tool_results[0]["content"])
+                if quick:
+                    text_from_llm = resp.text()
+                    reply = text_from_llm if text_from_llm else quick
+                    self._store.append_message(owner_user_id, "assistant", reply)
+                    return reply
+
             messages.append({"role": "user", "content": tool_results})
 
         fallback = "（已达到工具调用上限，请把指令拆开说）"
@@ -359,6 +371,59 @@ class IntentRouter:
         if job is None or job.owner_user_id != owner_user_id:
             return None
         return job
+
+
+def _quick_reply(tool_name: str, result_json: str) -> str | None:
+    """从工具结果直接生成用户可读的回复，省掉第二轮 LLM 调用。返回 None 表示需要 LLM 总结。"""
+    try:
+        r = json.loads(result_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not r.get("ok"):
+        return r.get("error") or "操作失败。"
+
+    if tool_name == "create_job":
+        c = r.get("created", {})
+        return f"已创建「{c.get('name', '')}」，{r.get('schedule_human', '')}，下次触发：{_fmt_time(r.get('next_run_at'))}。"
+
+    if tool_name == "update_job":
+        u = r.get("updated", {})
+        return f"已更新「{u.get('name', '')}」，{r.get('schedule_human', '')}。"
+
+    if tool_name == "delete_job":
+        return f"已删除「{r.get('deleted_name', '')}」。"
+
+    if tool_name == "set_enabled":
+        status = "启用" if r.get("enabled") else "暂停"
+        return f"已{status}。"
+
+    if tool_name == "run_now":
+        return f"已触发「{r.get('queued_name', '')}」。"
+
+    if tool_name == "list_jobs":
+        jobs = r.get("jobs", [])
+        if not jobs:
+            return "当前没有任务。"
+        lines = []
+        for j in jobs:
+            enabled = "✓" if j.get("enabled") else "⏸"
+            lines.append(f"{enabled} [{j['id'][:8]}] {j.get('name','')} · {describe_schedule(j.get('schedule_kind',''), j.get('schedule_value',{}))} · {j.get('goal','')}")
+        return "\n".join(lines)
+
+    if tool_name == "get_current_time":
+        return None
+
+    return None
+
+
+def _fmt_time(iso: str | None) -> str:
+    if not iso:
+        return "待定"
+    try:
+        dt = datetime.fromisoformat(iso)
+        return dt.strftime("%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso
 
 
 def _ok(payload: dict[str, Any], note: str | None = None) -> str:
