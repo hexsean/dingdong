@@ -50,6 +50,9 @@ class JobExecutor:
         )
         status = "delivered" if ok else "send-failed"
         self._store.record_run(job.id, f"{status}: {content[:400]}")
+        if job.schedule_kind == "date":
+            self._store.delete(job.id)
+            log.info("one-shot job %s (%s) cleaned up", job.id, job.name)
 
     def _generate(self, job: Job) -> str:
         now = datetime.now(self._tz)
