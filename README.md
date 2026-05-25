@@ -15,7 +15,7 @@
 ### Docker（推荐）
 
 ```bash
-git clone https://github.com/你的用户名/dingdong.git && cd dingdong
+git clone https://github.com/hexsean/dingdong.git && cd dingdong
 docker compose run --rm dingdong setup
 docker compose up -d
 ```
