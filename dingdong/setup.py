@@ -7,30 +7,22 @@ import sys
 from pathlib import Path
 
 PROVIDERS = [
-    {"key": "openrouter-free", "name": "OpenRouter (免费)", "type": "openai",
-     "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/free",
-     "note": "注册免费无需信用卡 openrouter.ai"},
-    {"key": "siliconflow", "name": "硅基流动 (注册送 2000 万 tokens)", "type": "openai",
-     "base_url": "https://api.siliconflow.cn/v1", "model": "Qwen/Qwen3-8B",
-     "note": "siliconflow.cn"},
-    {"key": "zhipu", "name": "智谱 (注册送 2000 万 tokens)", "type": "openai",
-     "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash",
-     "note": "open.bigmodel.cn"},
-    {"key": "moonshot", "name": "Moonshot / Kimi", "type": "openai",
-     "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k",
-     "note": "platform.moonshot.cn"},
-    {"key": "deepseek", "name": "DeepSeek", "type": "openai",
-     "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat",
-     "note": "platform.deepseek.com"},
-    {"key": "anthropic", "name": "Anthropic Claude", "type": "anthropic",
-     "base_url": "", "model": "claude-sonnet-4-6",
-     "note": "console.anthropic.com"},
-    {"key": "openai", "name": "OpenAI", "type": "openai",
-     "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini",
-     "note": "platform.openai.com"},
-    {"key": "custom", "name": "自定义 (OpenAI 兼容)", "type": "openai",
-     "base_url": "", "model": "",
-     "note": "任何 OpenAI 兼容接口"},
+    {"key": "openrouter-free", "name": "OpenRouter",   "tag": "免费",         "type": "openai",
+     "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/free"},
+    {"key": "siliconflow",     "name": "硅基流动",      "tag": "免费额度",     "type": "openai",
+     "base_url": "https://api.siliconflow.cn/v1", "model": "Qwen/Qwen3-8B"},
+    {"key": "zhipu",           "name": "智谱 GLM",      "tag": "免费额度",     "type": "openai",
+     "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash"},
+    {"key": "deepseek",        "name": "DeepSeek",      "tag": "",            "type": "openai",
+     "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
+    {"key": "moonshot",        "name": "Moonshot",      "tag": "",            "type": "openai",
+     "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
+    {"key": "anthropic",       "name": "Claude",        "tag": "",            "type": "anthropic",
+     "base_url": "", "model": "claude-sonnet-4-6"},
+    {"key": "openai",          "name": "OpenAI",        "tag": "",            "type": "openai",
+     "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    {"key": "custom",          "name": "自定义",         "tag": "",            "type": "openai",
+     "base_url": "", "model": ""},
 ]
 
 
@@ -63,12 +55,10 @@ def run_setup(data_dir: str = "./data") -> None:
     env: dict[str, str] = {}
 
     # --- LLM ---
-    print("  [1/3] 选择模型供应商")
-    print()
+    print("  [1/3] 选择模型供应商\n")
     for i, p in enumerate(PROVIDERS, 1):
-        tag = " ★" if "免费" in p["name"] or "送" in p["name"] else ""
+        tag = f"  ({p['tag']})" if p["tag"] else ""
         print(f"    {i}. {p['name']}{tag}")
-        print(f"       {p['note']}")
     print()
 
     while True:
