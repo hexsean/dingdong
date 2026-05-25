@@ -177,8 +177,6 @@ SEARCH_TOOL_SPECS = [
 def _tool_status(name: str, args: dict[str, Any]) -> str | None:
     if name == "search_web":
         return f"搜索「{args.get('query', '')}」..."
-    if name == "read_url":
-        return f"读取页面..."
     if name == "create_job":
         return f"创建「{args.get('name', '任务')}」..."
     return None
