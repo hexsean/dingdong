@@ -55,6 +55,10 @@ def _extract_text(item_list: list[dict[str, Any]]) -> str:
             text = (item.get("text_item") or {}).get("text")
             if text:
                 parts.append(text)
+        elif item_type == 3:
+            text = (item.get("voice_item") or {}).get("text")
+            if text:
+                parts.append(text)
     return "\n".join(parts)
 
 
