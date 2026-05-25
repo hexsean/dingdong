@@ -10,15 +10,6 @@ docker compose run --rm dingdong setup   # 选供应商、填 key、扫码
 docker compose up -d
 ```
 
-`setup` 支持多家供应商一键切换，含免费选项：
-
-| 供应商 | 费用 | 说明 |
-|--------|------|------|
-| OpenRouter | 免费 | 无需信用卡 |
-| 硅基流动 | 注册送 2000 万 tokens | 国内直连 |
-| 智谱 GLM | 注册送 2000 万 tokens | 国内直连 |
-| Moonshot / DeepSeek / OpenAI / Claude | 按量付费 | |
-
 ## 用法
 
 微信里直接对话：
