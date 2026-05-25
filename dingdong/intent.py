@@ -128,12 +128,28 @@ SEARCH_TOOL_SPEC = ToolSpec(
 )
 
 
+TOOL_STATUS = {
+    "list_jobs": "查看任务...",
+    "create_job": "创建任务...",
+    "update_job": "更新任务...",
+    "delete_job": "删除任务...",
+    "set_enabled": "更新任务...",
+    "run_now": "触发任务...",
+    "search_web": "搜索中...",
+}
+
+
 class IntentRouter:
     def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *, history_limit: int = 20) -> None:
         self._llm = llm
         self._store = store
         self._scheduler = scheduler
         self._history_limit = history_limit
+        self._on_thinking: Any = None
+
+    def set_thinking_callback(self, cb) -> None:
+        """设置回调：cb(owner_user_id, context_token) 在每轮 LLM 调用前触发，用于刷新 typing。"""
+        self._on_thinking = cb
 
     def handle(self, *, owner_user_id: str, context_token: str, text: str) -> str:
         if text.strip() in CLEAR_KEYWORDS:
@@ -144,7 +160,10 @@ class IntentRouter:
         history = self._store.get_history(owner_user_id, limit=self._history_limit)
 
         messages: list[dict[str, Any]] = list(history)
-        for _ in range(MAX_TOOL_ROUNDS):
+        for round_idx in range(MAX_TOOL_ROUNDS):
+            if self._on_thinking:
+                self._on_thinking(owner_user_id, context_token)
+
             tools = list(TOOL_SPECS)
             if search_available():
                 tools.append(SEARCH_TOOL_SPEC)

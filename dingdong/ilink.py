@@ -195,6 +195,26 @@ class ILinkClient:
             log.debug("sendmessage response: %s", result)
             return result
 
+    def send_text_partial(self, to_user_id: str, text: str, context_token: str) -> dict[str, Any]:
+        """发送未完成消息（message_state=1），微信端会显示为"仍在输入"。"""
+        if not text:
+            return {}
+        client_id = f"dd-{uuid.uuid4().hex[:16]}"
+        body = {
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": to_user_id,
+                "client_id": client_id,
+                "message_type": 2,
+                "message_state": 1,
+                "context_token": context_token,
+                "item_list": [{"type": 1, "text_item": {"text": text}}],
+            },
+            "base_info": {"channel_version": CHANNEL_VERSION},
+        }
+        with self._send_lock:
+            return self._post("/ilink/bot/sendmessage", body)
+
     # ---------- typing indicator ----------
 
     def get_typing_ticket(self, user_id: str, context_token: str) -> str | None:
