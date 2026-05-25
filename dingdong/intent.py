@@ -53,43 +53,46 @@ def _job_to_brief(job: Job) -> dict[str, Any]:
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         name="get_current_time",
-        description="获取当前日期和时间。",
+        description="返回服务器当前日期、时间和星期。用于计算相对时间。",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
     ),
     ToolSpec(
         name="list_jobs",
-        description="列出当前用户的所有定时任务。",
+        description="返回该用户的所有定时任务列表（含 id、名称、计划、目标、状态）。",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
     ),
     ToolSpec(
         name="create_job",
-        description="新建定时任务。cron 需 cron_expression(5字段)；interval 需 seconds/minutes/hours/days/weeks；date 需 run_at。",
+        description="创建定时任务。必填 name + goal + schedule_kind。"
+                    "cron: 提供 cron_expression（5字段，如 '0 9 * * *'）。"
+                    "interval: 提供 seconds/minutes/hours/days/weeks 至少一个。"
+                    "date: 提供 run_at（'YYYY-MM-DD HH:MM:SS'，本地时区）。",
         input_schema={
             "type": "object",
             "required": ["name", "goal", "schedule_kind"],
             "properties": {
-                "name": {"type": "string"},
-                "goal": {"type": "string"},
+                "name": {"type": "string", "description": "任务名称"},
+                "goal": {"type": "string", "description": "触发时要做什么的自然语言描述"},
                 "schedule_kind": {"type": "string", "enum": ["cron", "interval", "date"]},
-                "cron_expression": {"type": "string"},
+                "cron_expression": {"type": "string", "description": "5字段 crontab"},
                 "seconds": {"type": "integer", "minimum": 1},
                 "minutes": {"type": "integer", "minimum": 1},
                 "hours": {"type": "integer", "minimum": 1},
                 "days": {"type": "integer", "minimum": 1},
                 "weeks": {"type": "integer", "minimum": 1},
-                "run_at": {"type": "string"},
+                "run_at": {"type": "string", "description": "YYYY-MM-DD HH:MM:SS"},
             },
             "additionalProperties": False,
         },
     ),
     ToolSpec(
         name="update_job",
-        description="修改任务。job_id 可用完整 id 或前缀。未提供的字段不变。",
+        description="修改已有任务。job_id 支持完整 id 或前缀（至少4位）。只传需要改的字段，其余不变。",
         input_schema={
             "type": "object",
             "required": ["job_id"],
             "properties": {
-                "job_id": {"type": "string"},
+                "job_id": {"type": "string", "description": "任务 id 或前缀"},
                 "name": {"type": "string"}, "goal": {"type": "string"},
                 "schedule_kind": {"type": "string", "enum": ["cron", "interval", "date"]},
                 "cron_expression": {"type": "string"},
@@ -106,18 +109,36 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="delete_job",
-        description="删除任务。",
-        input_schema={"type": "object", "required": ["job_id"], "properties": {"job_id": {"type": "string"}}, "additionalProperties": False},
+        description="删除任务。传 job_id 删单个，传 job_ids 数组批量删，传 job_id='all' 删除该用户全部任务。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "任务 id/前缀，或 'all' 删全部"},
+                "job_ids": {"type": "array", "items": {"type": "string"}, "description": "批量删除的 id 列表"},
+            },
+            "additionalProperties": False,
+        },
     ),
     ToolSpec(
         name="set_enabled",
-        description="启用或暂停任务。",
-        input_schema={"type": "object", "required": ["job_id", "enabled"], "properties": {"job_id": {"type": "string"}, "enabled": {"type": "boolean"}}, "additionalProperties": False},
+        description="启用(true)或暂停(false)一个任务。",
+        input_schema={
+            "type": "object", "required": ["job_id", "enabled"],
+            "properties": {
+                "job_id": {"type": "string", "description": "任务 id 或前缀"},
+                "enabled": {"type": "boolean", "description": "true=启用 false=暂停"},
+            },
+            "additionalProperties": False,
+        },
     ),
     ToolSpec(
         name="run_now",
-        description="立即触发一次任务。",
-        input_schema={"type": "object", "required": ["job_id"], "properties": {"job_id": {"type": "string"}}, "additionalProperties": False},
+        description="立即触发一次任务执行，不影响后续定时计划。",
+        input_schema={
+            "type": "object", "required": ["job_id"],
+            "properties": {"job_id": {"type": "string", "description": "任务 id 或前缀"}},
+            "additionalProperties": False,
+        },
     ),
 ]
 
@@ -216,10 +237,8 @@ class IntentRouter:
             if not needs_llm_summary and len(tool_uses) == 1:
                 quick = _quick_reply(tool_uses[0]["name"], tool_results[0]["content"])
                 if quick:
-                    text_from_llm = resp.text()
-                    reply = text_from_llm if text_from_llm else quick
-                    self._store.append_message(owner_user_id, "assistant", reply)
-                    return reply
+                    self._store.append_message(owner_user_id, "assistant", quick)
+                    return quick
 
             messages.append({"role": "user", "content": tool_results})
 
@@ -337,12 +356,29 @@ class IntentRouter:
                      "schedule_human": describe_schedule(updated.schedule_kind, updated.schedule_value)})
 
     def _tool_delete_job(self, args: dict[str, Any], owner_user_id: str) -> str:
-        job = self._resolve_job(args.get("job_id", ""), owner_user_id)
-        if job is None:
-            return _err("找不到该任务")
-        self._scheduler.remove_job(job.id)
-        self._store.delete(job.id)
-        return _ok({"deleted_id": job.id, "deleted_name": job.name})
+        ids = args.get("job_ids") or []
+        single = args.get("job_id", "")
+        if single:
+            ids = [single] if single != "all" else []
+
+        if single == "all" or not ids:
+            jobs = self._store.list_jobs(owner_user_id=owner_user_id)
+            if not jobs:
+                return _ok({"deleted_count": 0}, note="没有任务可删")
+            ids = [j.id for j in jobs]
+
+        deleted = []
+        for raw_id in ids:
+            job = self._resolve_job(raw_id, owner_user_id)
+            if job is None:
+                continue
+            self._scheduler.remove_job(job.id)
+            self._store.delete(job.id)
+            deleted.append(job.name)
+
+        if not deleted:
+            return _err("没有找到可删除的任务")
+        return _ok({"deleted_count": len(deleted), "deleted_names": deleted})
 
     def _tool_set_enabled(self, args: dict[str, Any], owner_user_id: str) -> str:
         job = self._resolve_job(args.get("job_id", ""), owner_user_id)
@@ -399,7 +435,11 @@ def _quick_reply(tool_name: str, result_json: str) -> str | None:
         return f"已更新「{u.get('name', '')}」，{r.get('schedule_human', '')}。"
 
     if tool_name == "delete_job":
-        return f"已删除「{r.get('deleted_name', '')}」。"
+        names = r.get("deleted_names", [])
+        count = r.get("deleted_count", len(names))
+        if count == 1 and names:
+            return f"已删除「{names[0]}」。"
+        return f"已删除 {count} 个任务。"
 
     if tool_name == "set_enabled":
         status = "启用" if r.get("enabled") else "暂停"
