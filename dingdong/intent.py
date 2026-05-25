@@ -339,8 +339,16 @@ class IntentRouter:
                 fields[k] = str(args[k]).strip()
         if "enabled" in args:
             fields["enabled"] = bool(args["enabled"])
-        if "schedule_kind" in args:
-            kind = args["schedule_kind"]
+        kind = args.get("schedule_kind")
+        has_schedule_params = any(k in args for k in ("cron_expression", "seconds", "minutes", "hours", "days", "weeks", "run_at"))
+        if not kind and has_schedule_params:
+            if "cron_expression" in args:
+                kind = "cron"
+            elif "run_at" in args:
+                kind = "date"
+            else:
+                kind = "interval"
+        if kind:
             if kind not in VALID_SCHEDULE_KINDS:
                 return _err(f"schedule_kind 须为 {sorted(VALID_SCHEDULE_KINDS)}")
             fields["schedule_kind"] = kind
