@@ -4,8 +4,5 @@ services:
     restart: unless-stopped
     volumes:
       - ./data:/app/data
-    env_file:
-      - path: .env
-        required: false
     tty: true
     stdin_open: true

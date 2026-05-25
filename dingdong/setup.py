@@ -50,10 +50,10 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     print(f"\n  配置已保存到 {path}")
 
 
-def run_setup(data_dir: str = "./data", env_path: str = ".env") -> None:
-    env_file = Path(env_path).resolve()
+def run_setup(data_dir: str = "./data") -> None:
     data = Path(data_dir).resolve()
     data.mkdir(parents=True, exist_ok=True)
+    env_file = data / ".env"
 
     print()
     print("  叮咚 · 配置向导")

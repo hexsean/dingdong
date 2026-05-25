@@ -36,6 +36,7 @@ class Config:
 
 
 def load_config() -> Config:
+    load_dotenv(Path("data/.env"))
     load_dotenv()
 
     provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
