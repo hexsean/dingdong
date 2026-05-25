@@ -120,8 +120,7 @@ class Bot:
         except Exception as exc:
             log.exception("intent handling failed")
             reply = "出错了，请稍后重试。"
-        finally:
-            typing_stop.set()
+        typing_stop.set()
         if reply:
             log.info("reply (%d chars): %s", len(reply), reply[:200])
             ok = self._client.safe_send_text(owner, reply, ctx)
@@ -131,6 +130,7 @@ class Bot:
                 log.error("reply send FAILED after retries")
         else:
             log.warning("intent returned empty reply")
+        self._cancel_typing(owner, ctx)
 
     # ---------- feedback ----------
 
@@ -151,6 +151,11 @@ class Bot:
             ok = self._client.send_typing(user_id, ticket)
             if not ok:
                 self._typing_tickets.pop(user_id, None)
+
+    def _cancel_typing(self, user_id: str, context_token: str) -> None:
+        ticket = self._typing_tickets.get(user_id)
+        if ticket:
+            self._client.send_typing(user_id, ticket, typing=False)
 
     def _start_typing_loop(self, user_id: str, context_token: str) -> threading.Event:
         """启动后台线程每 3 秒刷新 typing 状态，返回 stop event。"""
