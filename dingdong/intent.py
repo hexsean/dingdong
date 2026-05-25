@@ -170,6 +170,9 @@ def _tool_status(name: str, args: dict[str, Any]) -> str | None:
     return None
 
 
+CONFIRM_KEYWORDS = {"确认", "确定", "是", "yes", "y"}
+
+
 class IntentRouter:
     def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *, history_limit: int = 20) -> None:
         self._llm = llm
@@ -177,15 +180,22 @@ class IntentRouter:
         self._scheduler = scheduler
         self._history_limit = history_limit
         self._on_status = None
+        self._pending_clear: set[str] = set()
 
     def set_callbacks(self, *, on_status=None) -> None:
         self._on_status = on_status
 
     def handle(self, *, owner_user_id: str, context_token: str, text: str) -> str:
         stripped = text.strip()
+        if owner_user_id in self._pending_clear:
+            self._pending_clear.discard(owner_user_id)
+            if stripped.lower() in CONFIRM_KEYWORDS:
+                n = self._store.clear_history(owner_user_id)
+                return f"已清空对话记录（{n} 条）。"
+            return "已取消。"
         if stripped in CLEAR_KEYWORDS:
-            n = self._store.clear_history(owner_user_id)
-            return f"已清空对话记录（{n} 条）。"
+            self._pending_clear.add(owner_user_id)
+            return "确认清空所有对话记录？回复「确认」执行。"
         if stripped.lower() in GREETING_KEYWORDS:
             self._store.append_message(owner_user_id, "user", text)
             self._store.append_message(owner_user_id, "assistant", GREETING_REPLY)
