@@ -182,7 +182,7 @@ class Bot:
         from apscheduler.triggers.interval import IntervalTrigger
         self._scheduler._scheduler.add_job(
             self._check_update,
-            trigger=IntervalTrigger(hours=24),
+            trigger=IntervalTrigger(hours=1),
             id=CHECK_ID,
             replace_existing=True,
             next_run_time=None,  # 不立即执行，等 24h
