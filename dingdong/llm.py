@@ -242,3 +242,15 @@ def build_provider(cfg) -> LLMProvider:  # cfg: Config
     if cfg.llm_provider == "openai":
         return OpenAIProvider(cfg.openai_api_key, cfg.openai_model, cfg.openai_base_url)
     raise ValueError(f"unknown LLM provider {cfg.llm_provider!r}")
+
+
+def build_vision_provider(cfg) -> LLMProvider | None:
+    """从 VISION_* 配置构建独立视觉模型 provider，未配置返回 None。"""
+    if not cfg.vision_provider or not cfg.vision_model or not cfg.vision_api_key:
+        return None
+    if cfg.vision_provider == "anthropic":
+        return AnthropicProvider(cfg.vision_api_key, cfg.vision_model)
+    if cfg.vision_provider == "openai":
+        base_url = cfg.vision_base_url or "https://api.openai.com/v1"
+        return OpenAIProvider(cfg.vision_api_key, cfg.vision_model, base_url)
+    raise ValueError(f"unknown VISION_PROVIDER {cfg.vision_provider!r}")

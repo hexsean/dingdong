@@ -190,9 +190,11 @@ CONFIRM_KEYWORDS = {"确认", "确定", "是", "yes", "y"}
 
 class IntentRouter:
     def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *,
-                 history_limit: int = 20, model_info: "ModelInfo | None" = None) -> None:
+                 history_limit: int = 20, model_info: "ModelInfo | None" = None,
+                 vision_llm: LLMProvider | None = None) -> None:
         from .models import ModelInfo
         self._llm = llm
+        self._vision_llm = vision_llm
         self._store = store
         self._scheduler = scheduler
         self._history_limit = history_limit
@@ -245,31 +247,19 @@ class IntentRouter:
                 return shortcut
 
         if has_images and not self._vision_supported:
-            return "当前配置的模型不支持图片理解，请在 .env 中切换为支持视觉的模型（如 Claude Sonnet、GPT-4o、Qwen-VL 等）。"
-
-        self._store.append_message(owner_user_id, "user", text or "[图片]")
-        history = self._store.get_history(owner_user_id, limit=self._history_limit)
-
-        messages: list[dict[str, Any]] = list(history)
+            return ("当前配置的模型不支持图片理解。\n"
+                    "方案一：主模型换为 Claude Sonnet、GPT-4o 等视觉模型\n"
+                    "方案二：在 .env 中单独配置视觉模型（VISION_PROVIDER / VISION_MODEL / VISION_API_KEY）")
 
         if has_images:
-            last_user = messages[-1] if messages and messages[-1]["role"] == "user" else None
-            if last_user:
-                content_parts: list[dict[str, Any]] = []
-                if last_user.get("content"):
-                    content_parts.append({"type": "text", "text": last_user["content"]})
-                else:
-                    content_parts.append({"type": "text", "text": "请描述这张图片。"})
-                for img_data in image_bytes_list:
-                    content_parts.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": base64.b64encode(img_data).decode(),
-                        },
-                    })
-                last_user["content"] = content_parts
+            image_desc = self._describe_images(image_bytes_list, text)
+            user_text = f"{text}\n\n[图片内容：{image_desc}]" if text else f"[图片内容：{image_desc}]"
+            self._store.append_message(owner_user_id, "user", user_text)
+        else:
+            self._store.append_message(owner_user_id, "user", text)
+
+        history = self._store.get_history(owner_user_id, limit=self._history_limit)
+        messages: list[dict[str, Any]] = list(history)
         for round_idx in range(MAX_TOOL_ROUNDS):
             tools = list(TOOL_SPECS)
             if search_available():
@@ -329,6 +319,34 @@ class IntentRouter:
         now = datetime.now(self._tz())
         weekday = "星期" + "一二三四五六日"[now.weekday()]
         return INTENT_SYSTEM_PROMPT + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}\n"
+
+    # ---------- vision ----------
+
+    _VISION_SYSTEM = "描述图片内容，简洁准确，中文。如果用户附带了问题就直接回答。"
+
+    def _describe_images(self, image_bytes_list: list[bytes], user_text: str) -> str:
+        """用视觉模型将图片转为文字描述。"""
+        llm = self._vision_llm or self._llm
+        content_parts: list[dict[str, Any]] = []
+        if user_text:
+            content_parts.append({"type": "text", "text": user_text})
+        else:
+            content_parts.append({"type": "text", "text": "请描述这张图片。"})
+        for img_data in image_bytes_list:
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.b64encode(img_data).decode(),
+                },
+            })
+        resp = llm.chat(
+            system=self._VISION_SYSTEM,
+            messages=[{"role": "user", "content": content_parts}],
+            max_tokens=1024,
+        )
+        return resp.text() or "[图片描述失败]"
 
     # ---------- shortcuts (skip LLM entirely,仅精确匹配) ----------
 

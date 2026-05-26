@@ -22,6 +22,10 @@ class Config:
     history_limit: int
     allowed_user_ids: frozenset[str]
     vision_enabled: bool | None  # True/False=手动覆盖, None=自动检测
+    vision_provider: str  # ""=用主模型, "anthropic"/"openai"=独立视觉模型
+    vision_api_key: str
+    vision_base_url: str
+    vision_model: str
 
     @property
     def db_path(self) -> Path:
@@ -71,4 +75,8 @@ def load_config() -> Config:
         history_limit=int(os.getenv("HISTORY_LIMIT", "20")),
         allowed_user_ids=allowed,
         vision_enabled=vision_enabled,
+        vision_provider=os.getenv("VISION_PROVIDER", "").strip().lower(),
+        vision_api_key=os.getenv("VISION_API_KEY", ""),
+        vision_base_url=os.getenv("VISION_BASE_URL", ""),
+        vision_model=os.getenv("VISION_MODEL", ""),
     )

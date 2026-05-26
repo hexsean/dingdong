@@ -20,7 +20,7 @@ from .config import Config
 from .executor import JobExecutor
 from .ilink import ILinkClient, ILinkError
 from .intent import IntentRouter
-from .llm import build_provider
+from .llm import build_provider, build_vision_provider
 from .login import ensure_login, load_session, save_session
 from .models import fetch_model_info
 from .scheduler import Scheduler
@@ -53,12 +53,18 @@ class Bot:
         )
         self._executor = JobExecutor(self._llm, self._client, self._store, tz=cfg.scheduler_tz)
         self._scheduler = Scheduler(self._store, self._executor.run, cfg.scheduler_tz)
-        model_name = cfg.anthropic_model if cfg.llm_provider == "anthropic" else cfg.openai_model
+
+        self._vision_llm = build_vision_provider(cfg)
+        vision_model_name = cfg.vision_model if self._vision_llm else (
+            cfg.anthropic_model if cfg.llm_provider == "anthropic" else cfg.openai_model
+        )
+        vision_override = True if self._vision_llm else cfg.vision_enabled
         self._model_info = fetch_model_info(
-            model_name, data_dir=cfg.data_dir, vision_override=cfg.vision_enabled,
+            vision_model_name, data_dir=cfg.data_dir, vision_override=vision_override,
         )
         self._intent = IntentRouter(self._llm, self._store, self._scheduler,
-                                    history_limit=cfg.history_limit, model_info=self._model_info)
+                                    history_limit=cfg.history_limit, model_info=self._model_info,
+                                    vision_llm=self._vision_llm)
         self._intent.set_callbacks(
             on_status=self._send_status,
         )
