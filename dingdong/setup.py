@@ -66,6 +66,54 @@ def _ask_secret(prompt: str, current: str = "") -> str:
     return _ask(prompt)
 
 
+def _test_model(provider_type: str, api_key: str, model: str, base_url: str = "") -> tuple[bool, str]:
+    """发送一条测试消息验证模型配置是否可用。"""
+    print(f"\n  测试 {model} ...", end=" ", flush=True)
+    try:
+        if provider_type == "anthropic":
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            client.messages.create(
+                model=model, max_tokens=16,
+                messages=[{"role": "user", "content": "Reply OK"}],
+            )
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key, base_url=base_url or "https://api.openai.com/v1")
+            client.chat.completions.create(
+                model=model, max_tokens=16,
+                messages=[{"role": "user", "content": "Reply OK"}],
+            )
+        print("✓ 通过")
+        return True, ""
+    except Exception as exc:
+        print("✗ 失败")
+        reason = _classify_error(exc)
+        print(f"  原因: {reason}")
+        return False, reason
+
+
+def _classify_error(exc: Exception) -> str:
+    name = type(exc).__name__
+    msg = str(exc)[:200]
+    code = getattr(exc, "status_code", None)
+    if code == 401 or "auth" in msg.lower() or "unauthorized" in msg.lower():
+        return "API Key 无效或已过期"
+    if code == 403 or "permission" in msg.lower():
+        return "无权限访问该模型"
+    if code == 404 or "not found" in msg.lower() or "does not exist" in msg.lower():
+        return f"模型不存在，请检查模型名称"
+    if code == 429 or "rate" in msg.lower():
+        return "触发频率限制，请稍后重试"
+    if "billing" in msg.lower() or "quota" in msg.lower() or "insufficient" in msg.lower():
+        return "账户余额不足或配额用尽"
+    if "timeout" in msg.lower() or "timed out" in msg.lower():
+        return "请求超时，请检查网络"
+    if "connection" in msg.lower() or "resolve" in msg.lower():
+        return f"无法连接到服务器，请检查 Base URL"
+    return f"{name}: {msg}"
+
+
 def _load_env(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -148,19 +196,27 @@ def run_setup(data_dir: str = "./data") -> None:
             break
         print(f"  请输入 1-{len(PROVIDERS)}")
 
-    if provider["type"] == "anthropic":
-        env["LLM_PROVIDER"] = "anthropic"
-        env["ANTHROPIC_API_KEY"] = _ask_secret("API Key", existing.get("ANTHROPIC_API_KEY", ""))
-        env["ANTHROPIC_MODEL"] = _ask("Model", existing.get("ANTHROPIC_MODEL", provider["model"]))
-    else:
-        env["LLM_PROVIDER"] = "openai"
-        env["OPENAI_API_KEY"] = _ask_secret("API Key", existing.get("OPENAI_API_KEY", ""))
-        if provider["key"] == "custom":
-            env["OPENAI_BASE_URL"] = _ask("Base URL", existing.get("OPENAI_BASE_URL", ""))
-            env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", ""))
+    while True:
+        if provider["type"] == "anthropic":
+            env["LLM_PROVIDER"] = "anthropic"
+            env["ANTHROPIC_API_KEY"] = _ask_secret("API Key", existing.get("ANTHROPIC_API_KEY", ""))
+            env["ANTHROPIC_MODEL"] = _ask("Model", existing.get("ANTHROPIC_MODEL", provider["model"]))
+            ok, _ = _test_model("anthropic", env["ANTHROPIC_API_KEY"], env["ANTHROPIC_MODEL"])
         else:
-            env["OPENAI_BASE_URL"] = provider["base_url"]
-            env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", provider["model"]))
+            env["LLM_PROVIDER"] = "openai"
+            env["OPENAI_API_KEY"] = _ask_secret("API Key", existing.get("OPENAI_API_KEY", ""))
+            if provider["key"] == "custom":
+                env["OPENAI_BASE_URL"] = _ask("Base URL", existing.get("OPENAI_BASE_URL", ""))
+                env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", ""))
+            else:
+                env["OPENAI_BASE_URL"] = provider["base_url"]
+                env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", provider["model"]))
+            ok, _ = _test_model("openai", env["OPENAI_API_KEY"], env["OPENAI_MODEL"], env.get("OPENAI_BASE_URL", ""))
+        if ok:
+            break
+        retry = _ask("重新输入？(Y/n)", "Y")
+        if retry.lower() in ("n", "no"):
+            break
     print()
 
     # --- Vision ---
@@ -263,16 +319,32 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
         print(f"  请输入 1-{len(PROVIDERS)}，或回车跳过")
 
     vp = PROVIDERS[int(v_raw) - 1]
-    env["VISION_PROVIDER"] = vp["type"]
-    env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
-    if vp["key"] == "custom":
-        env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
-        env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
-    else:
-        if vp["base_url"]:
-            env["VISION_BASE_URL"] = vp["base_url"]
-        env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
-    print(f"\n    视觉能力将在启动时自动检测。如检测不到，可在 .env 中设置 VISION_ENABLED=true 强制开启。")
+
+    while True:
+        env["VISION_PROVIDER"] = vp["type"]
+        env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
+        if vp["key"] == "custom":
+            env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
+            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
+        else:
+            if vp["base_url"]:
+                env["VISION_BASE_URL"] = vp["base_url"]
+            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
+
+        ok, _ = _test_model(
+            vp["type"], env["VISION_API_KEY"],
+            env["VISION_MODEL"], env.get("VISION_BASE_URL", ""),
+        )
+        if ok:
+            break
+        retry = _ask("重新输入？(Y/n)", "Y")
+        if retry.lower() in ("n", "no"):
+            for k in ("VISION_PROVIDER", "VISION_API_KEY", "VISION_BASE_URL", "VISION_MODEL"):
+                env.pop(k, None)
+            print("  已跳过视觉模型配置。")
+            return
+
+    print("    视觉能力将在启动时自动检测。如检测不到，可在 .env 中设置 VISION_ENABLED=true 强制开启。")
 
 
 def _setup_timezone(env: dict[str, str]) -> None:
