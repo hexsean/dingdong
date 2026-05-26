@@ -237,7 +237,7 @@ class IntentRouter:
                 if rv is None:
                     return f"当前版本 v{lv}，无法连接更新服务器。"
                 if rv != lv:
-                    return f"当前版本 v{lv}，最新版本 v{rv}。\n更新：docker compose pull && docker compose up -d"
+                    return f"当前版本 v{lv}，最新版本 v{rv}。\n更新：docker pull hexsean/dingdong:{rv} && docker compose up -d"
                 return f"当前版本 v{lv}，已是最新。"
 
             shortcut = self._try_shortcut(stripped, owner_user_id)

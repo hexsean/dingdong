@@ -31,15 +31,6 @@ PROVIDERS = [
      "base_url": "", "model": ""},
 ]
 
-_VISION_PROVIDERS = [
-    {"name": "OpenAI (GPT-4o-mini)", "type": "openai",
-     "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
-    {"name": "Claude (Sonnet)", "type": "anthropic",
-     "base_url": "", "model": "claude-sonnet-4-6"},
-    {"name": "自定义", "type": "openai",
-     "base_url": "", "model": ""},
-]
-
 _TZ_OPTIONS = [
     ("Asia/Shanghai",      "北京/上海"),
     ("Asia/Tokyo",         "东京"),
@@ -258,23 +249,30 @@ def run_setup(data_dir: str = "./data") -> None:
 
 
 def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
-    print("    可选视觉模型：")
-    for i, vp in enumerate(_VISION_PROVIDERS, 1):
-        print(f"      {i}. {vp['name']}")
+    print("    选择视觉模型渠道（与主模型可以不同）：\n")
+    for i, p in enumerate(PROVIDERS):
+        print(f"      {i + 1}. {p['name']}")
     print()
 
-    v_raw = _ask("输入编号（回车跳过）")
-    if v_raw.isdigit() and 1 <= int(v_raw) <= len(_VISION_PROVIDERS):
-        vp = _VISION_PROVIDERS[int(v_raw) - 1]
-        env["VISION_PROVIDER"] = vp["type"]
-        env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
-        if vp["name"] == "自定义":
-            env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
-            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
-        else:
-            if vp["base_url"]:
-                env["VISION_BASE_URL"] = vp["base_url"]
-            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
+    while True:
+        v_raw = _ask("输入编号（回车跳过）")
+        if not v_raw:
+            return
+        if v_raw.isdigit() and 1 <= int(v_raw) <= len(PROVIDERS):
+            break
+        print(f"  请输入 1-{len(PROVIDERS)}，或回车跳过")
+
+    vp = PROVIDERS[int(v_raw) - 1]
+    env["VISION_PROVIDER"] = vp["type"]
+    env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
+    if vp["key"] == "custom":
+        env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
+        env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
+    else:
+        if vp["base_url"]:
+            env["VISION_BASE_URL"] = vp["base_url"]
+        env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
+    print(f"\n    视觉能力将在启动时自动检测。如检测不到，可在 .env 中设置 VISION_ENABLED=true 强制开启。")
 
 
 def _setup_timezone(env: dict[str, str]) -> None:

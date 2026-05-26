@@ -225,7 +225,11 @@ class Bot:
             self._notify_update(lv, rv)
 
     def _notify_update(self, current: str, latest: str) -> None:
-        msg = f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n更新：docker compose pull && docker compose up -d\n关闭提醒：发「关闭更新提醒」"
+        msg = (
+            f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
+            f"更新：docker pull hexsean/dingdong:{latest} && docker compose up -d\n"
+            "关闭提醒：发「关闭更新提醒」"
+        )
         session = load_session(self._cfg.session_path) or {}
         # 通知最近活跃的用户
         jobs = self._store.list_jobs()
