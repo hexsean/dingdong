@@ -36,7 +36,8 @@ INTENT_SYSTEM_PROMPT = """\
 - 用户要删多个任务，用 job_ids 数组一次删完，或用 job_id="all" 全删
 - 用户问任务列表，只调 list_jobs，不要创建任何任务
 - 不要自作主张创建用户没要求的任务
-- 任务操作回复直接给结果，一句话说完
+- 创建/修改/删除任务回复一句话说完
+- 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
 - 搜索结果要详细展示：列出要点、来源，不要过度压缩。可用 read_url 获取页面详情后再总结
 
 用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；发"检查更新"查看版本；换绑需在服务器操作。
@@ -66,7 +67,7 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="list_jobs",
-        description="返回该用户的所有定时任务列表（含 id、名称、计划、目标、状态）。",
+        description="返回该用户的所有定时任务列表。必须完整展示每个任务的全部字段：名称、目标、计划类型、计划详情、启用状态、下次触发时间。不得省略任何任务或字段。",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
     ),
     ToolSpec(
@@ -246,7 +247,7 @@ class IntentRouter:
                 system=self._system_prompt(),
                 messages=messages,
                 tools=tools,
-                max_tokens=1024,
+                max_tokens=2048,
             )
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": resp.content}
             if resp.reasoning_content is not None:
