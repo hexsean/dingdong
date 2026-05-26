@@ -26,6 +26,9 @@ class Config:
     vision_api_key: str
     vision_base_url: str
     vision_model: str
+    wechat_update_enabled: bool
+    watchtower_url: str
+    watchtower_token: str
 
     @property
     def db_path(self) -> Path:
@@ -54,6 +57,10 @@ def load_config() -> Config:
     raw_allowed = os.getenv("ALLOWED_USER_IDS", "").strip()
     allowed = frozenset(x.strip() for x in raw_allowed.split(",") if x.strip())
 
+    wechat_update_enabled = os.getenv("WECHAT_UPDATE_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "y", "on",
+    )
+
     raw_vision = os.getenv("VISION_ENABLED", "").strip().lower()
     vision_enabled: bool | None = None
     if raw_vision in ("true", "1", "yes"):
@@ -79,4 +86,7 @@ def load_config() -> Config:
         vision_api_key=os.getenv("VISION_API_KEY", ""),
         vision_base_url=os.getenv("VISION_BASE_URL", ""),
         vision_model=os.getenv("VISION_MODEL", ""),
+        wechat_update_enabled=wechat_update_enabled,
+        watchtower_url=os.getenv("WATCHTOWER_URL", "http://watchtower:8080/v1/update"),
+        watchtower_token=os.getenv("WATCHTOWER_HTTP_API_TOKEN", ""),
     )

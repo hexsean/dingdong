@@ -54,6 +54,7 @@ def cmd_logout(_args: argparse.Namespace) -> int:
 
 def cmd_status(_args: argparse.Namespace) -> int:
     from dingdong.config import load_config
+    from dingdong.self_update import update_configured
     from dingdong.storage import JobStore
     from dingdong.updater import local_version
     cfg = load_config()
@@ -61,6 +62,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"LLM:      {cfg.llm_provider}")
     print(f"数据目录: {cfg.data_dir}")
     print(f"时区:     {cfg.scheduler_tz}")
+    print(f"微信更新: {'✓' if update_configured(cfg.wechat_update_enabled, cfg.watchtower_token) else '✗'}")
     print(f"登录态:   {'✓' if cfg.session_path.exists() else '✗'}")
     if cfg.db_path.exists():
         store = JobStore(cfg.db_path)

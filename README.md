@@ -10,6 +10,8 @@ docker compose run --rm dingdong setup   # 选供应商、填 key、扫码
 docker compose up -d
 ```
 
+`setup` 会写入运行配置，默认开启微信内更新并生成 updater 令牌。
+
 之后再次运行 `setup` 修改配置时，正在运行的主服务会自动重启并读取新配置。
 
 ## 用法
@@ -53,6 +55,18 @@ docker compose up -d --force-recreate
 DINGDONG_VERSION=0.3.x docker compose pull
 DINGDONG_VERSION=0.3.x docker compose up -d --force-recreate
 ```
+
+### 微信里更新
+
+首次 `setup` 默认开启微信内更新并自动生成 updater 令牌。已有部署升级到本版本后，同步新版 `docker-compose.yml`，再重新运行一次：
+
+```bash
+docker compose run --rm dingdong setup
+docker compose up -d
+```
+
+之后微信里发「检查更新」查看版本，发「更新叮咚」并回复「确认更新」即可。
+微信更新适用于默认 `latest` 部署；如果使用 `DINGDONG_VERSION=...` 固定版本，请手动改版本号后更新。
 
 ## License
 

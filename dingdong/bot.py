@@ -27,7 +27,7 @@ from .restart import RESTART_CHECK_INTERVAL_SECONDS, restart_marker_signature
 from .scheduler import Scheduler
 from .search import init_exa
 from .storage import JobStore
-from .updater import CHECK_ID, local_version, remote_version, is_disabled
+from .updater import CHECK_ID, is_disabled, is_newer_version, local_version, remote_version
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +65,10 @@ class Bot:
         )
         self._intent = IntentRouter(self._llm, self._store, self._scheduler,
                                     history_limit=cfg.history_limit, model_info=self._model_info,
-                                    vision_llm=self._vision_llm)
+                                    vision_llm=self._vision_llm,
+                                    wechat_update_enabled=cfg.wechat_update_enabled,
+                                    watchtower_url=cfg.watchtower_url,
+                                    watchtower_token=cfg.watchtower_token)
         self._intent.set_callbacks(
             on_status=self._send_status,
         )
@@ -240,14 +243,14 @@ class Bot:
             return
         rv = remote_version()
         lv = local_version()
-        if rv and rv != lv:
+        if rv and is_newer_version(rv, lv):
             log.info("new version available: %s (current: %s)", rv, lv)
             self._notify_update(lv, rv)
 
     def _notify_update(self, current: str, latest: str) -> None:
         msg = (
             f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
-            "更新：docker compose pull && docker compose up -d --force-recreate\n"
+            "更新：发「检查更新」查看可用方式\n"
             "关闭提醒：发「关闭更新提醒」"
         )
         session = load_session(self._cfg.session_path) or {}

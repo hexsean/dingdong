@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import requests
@@ -33,6 +34,21 @@ def remote_version() -> str | None:
     except Exception as exc:
         log.debug("fetch remote version failed: %s", exc)
     return None
+
+
+def _version_tuple(version: str) -> tuple[int, int, int] | None:
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", version.strip())
+    if not m:
+        return None
+    return tuple(int(part) for part in m.groups())
+
+
+def is_newer_version(remote: str, local: str) -> bool:
+    remote_tuple = _version_tuple(remote)
+    local_tuple = _version_tuple(local)
+    if remote_tuple is not None and local_tuple is not None:
+        return remote_tuple > local_tuple
+    return remote.strip() != local.strip()
 
 
 def is_disabled(data_dir: Path) -> bool:

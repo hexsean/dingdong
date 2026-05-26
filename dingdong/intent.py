@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,8 +17,15 @@ from zoneinfo import ZoneInfo
 from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
 from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
+from .self_update import (
+    manual_update_command,
+    pinned_version_note,
+    read_update_result,
+    trigger_watchtower_update,
+    update_configured,
+)
 from .storage import Job, JobStore, VALID_SCHEDULE_KINDS, describe_schedule, new_job_id
-from .updater import set_disabled, is_disabled, local_version, remote_version
+from .updater import is_disabled, is_newer_version, local_version, remote_version, set_disabled
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +34,9 @@ MAX_TOOL_ROUNDS = 6
 CLEAR_KEYWORDS = {"清空对话", "新对话", "重置对话", "清除历史"}
 GREETING_KEYWORDS = {"你好", "hi", "hello", "hey", "嗨", "在吗", "在不在", "你在吗"}
 GREETING_REPLY = "在的，有什么需要帮忙的？"
+UPDATE_KEYWORDS = {"更新叮咚", "升级叮咚", "立即更新", "开始更新"}
+UPDATE_STATUS_KEYWORDS = {"更新状态", "查看更新状态"}
+UPDATE_CONFIRM_KEYWORDS = {"确认更新", "确认升级"}
 
 INTENT_SYSTEM_PROMPT = """\
 你是叮咚，微信定时任务助手。极简回复，不废话。
@@ -191,7 +202,10 @@ CONFIRM_KEYWORDS = {"确认", "确定", "是", "yes", "y"}
 class IntentRouter:
     def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *,
                  history_limit: int = 20, model_info: "ModelInfo | None" = None,
-                 vision_llm: LLMProvider | None = None) -> None:
+                 vision_llm: LLMProvider | None = None,
+                 wechat_update_enabled: bool = False,
+                 watchtower_url: str = "http://watchtower:8080/v1/update",
+                 watchtower_token: str = "") -> None:
         from .models import ModelInfo
         self._llm = llm
         self._vision_llm = vision_llm
@@ -200,8 +214,12 @@ class IntentRouter:
         self._history_limit = history_limit
         self._on_status = None
         self._pending_clear: set[str] = set()
+        self._pending_update: dict[str, str] = {}
         self._model_info = model_info or ModelInfo(model_id="")
         self._vision_supported = self._model_info.supports_vision
+        self._wechat_update_enabled = wechat_update_enabled
+        self._watchtower_url = watchtower_url
+        self._watchtower_token = watchtower_token
 
     def set_callbacks(self, *, on_status=None) -> None:
         self._on_status = on_status
@@ -212,6 +230,11 @@ class IntentRouter:
         has_images = bool(image_bytes_list)
 
         if not has_images:
+            if owner_user_id in self._pending_update:
+                latest = self._pending_update.pop(owner_user_id)
+                if stripped in UPDATE_CONFIRM_KEYWORDS or stripped.lower() in CONFIRM_KEYWORDS:
+                    return self._start_update(owner_user_id, latest)
+                return "已取消更新。"
             if owner_user_id in self._pending_clear:
                 self._pending_clear.discard(owner_user_id)
                 if stripped.lower() in CONFIRM_KEYWORDS:
@@ -232,13 +255,11 @@ class IntentRouter:
                 set_disabled(self._store.db_path.parent, False)
                 return "已开启更新提醒。"
             if stripped in {"检查更新", "版本", "当前版本"}:
-                lv = local_version()
-                rv = remote_version()
-                if rv is None:
-                    return f"当前版本 v{lv}，无法连接更新服务器。"
-                if rv != lv:
-                    return f"当前版本 v{lv}，最新版本 v{rv}。\n更新：docker pull hexsean/dingdong:{rv} && docker compose up -d"
-                return f"当前版本 v{lv}，已是最新。"
+                return self._check_update(owner_user_id)
+            if stripped in UPDATE_STATUS_KEYWORDS:
+                return self._update_status()
+            if stripped in UPDATE_KEYWORDS:
+                return self._prepare_update(owner_user_id)
 
             shortcut = self._try_shortcut(stripped, owner_user_id)
             if shortcut is not None:
@@ -374,6 +395,76 @@ class IntentRouter:
             result = self._tool_list_jobs(owner_user_id)
             return _quick_reply("list_jobs", result)
         return None
+
+    # ---------- self update ----------
+
+    def _check_update(self, owner_user_id: str) -> str:
+        lv = local_version()
+        rv = remote_version()
+        if rv is None:
+            return f"当前版本 v{lv}，无法连接更新服务器。"
+        if not is_newer_version(rv, lv):
+            return f"当前版本 v{lv}，已是最新。"
+        lines = [f"当前版本 v{lv}，最新版本 v{rv}。"]
+        if self._can_wechat_update():
+            lines.append("发「更新叮咚」可在微信里更新。")
+            lines.append(pinned_version_note())
+        else:
+            lines.append(f"手动更新：{manual_update_command()}")
+            lines.append("微信更新未启用；运行 setup 开启后可在微信里更新。")
+        return "\n".join(lines)
+
+    def _prepare_update(self, owner_user_id: str) -> str:
+        if not self._can_wechat_update():
+            return (
+                "微信更新未开启。\n"
+                "运行 docker compose run --rm dingdong setup 开启，然后 docker compose up -d 生效。"
+            )
+        lv = local_version()
+        rv = remote_version()
+        if rv is None:
+            return f"当前版本 v{lv}，无法连接更新服务器。"
+        if not is_newer_version(rv, lv):
+            return f"当前版本 v{lv}，已是最新。"
+        self._pending_update[owner_user_id] = rv
+        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n{pinned_version_note()}\n回复「确认更新」执行。"
+
+    def _start_update(self, owner_user_id: str, latest: str) -> str:
+        if not self._can_wechat_update():
+            return "微信更新未开启。"
+        t = threading.Thread(
+            target=trigger_watchtower_update,
+            kwargs={
+                "data_dir": self._store.db_path.parent,
+                "url": self._watchtower_url,
+                "token": self._watchtower_token,
+                "target_version": latest,
+            },
+            daemon=True,
+            name="watchtower-update",
+        )
+        t.start()
+        return "已触发更新，稍后会短暂重启。发「更新状态」可查看结果。"
+
+    def _update_status(self) -> str:
+        result = read_update_result(self._store.db_path.parent)
+        if result is None:
+            return "暂无更新任务。"
+        status = result.get("status", "unknown")
+        version = result.get("target_version", "")
+        message = result.get("message", "")
+        if version and local_version() == version:
+            return f"更新完成：v{version}。"
+        if status == "running":
+            return f"正在更新到 v{version}..."
+        if status == "done":
+            return f"更新已触发：v{version}。如当前版本仍未变化，请稍后再查。"
+        if status == "failed":
+            return f"更新失败：{message or '请查看 updater 日志'}。"
+        return f"更新状态：{status} {message}".strip()
+
+    def _can_wechat_update(self) -> bool:
+        return update_configured(self._wechat_update_enabled, self._watchtower_token)
 
     # ---------- tools ----------
 

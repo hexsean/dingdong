@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -55,6 +56,10 @@ def _mask(val: str) -> str:
     if len(val) <= 8:
         return "***"
     return val[:4] + "***" + val[-4:]
+
+
+def _is_enabled(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 def _ask_secret(prompt: str, current: str = "") -> str:
@@ -156,6 +161,14 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     print(f"\n  配置已保存到 {path}")
 
 
+def _write_updater_env(path: Path, values: dict[str, str]) -> None:
+    token = values.get("WATCHTOWER_HTTP_API_TOKEN", "").strip()
+    if not token:
+        return
+    path.write_text(f"WATCHTOWER_HTTP_API_TOKEN={token}\n", encoding="utf-8")
+    print(f"  Updater 配置已保存到 {path}")
+
+
 def _request_restart(data: Path) -> None:
     from .restart import request_service_restart
     request_service_restart(data)
@@ -198,7 +211,7 @@ def run_setup(data_dir: str = "./data") -> None:
     env: dict[str, str] = dict(existing)
 
     # --- LLM ---
-    print("  [1/4] 选择模型渠道\n")
+    print("  [1/5] 选择模型渠道\n")
     current = _detect_provider(existing)
     for i, p in enumerate(PROVIDERS):
         mark = " ←当前" if current and p["key"] == current["key"] else ""
@@ -248,7 +261,7 @@ def run_setup(data_dir: str = "./data") -> None:
     print()
 
     # --- Vision ---
-    print("  [2/4] 图片理解\n")
+    print("  [2/5] 图片理解\n")
     print("    图片理解能力取决于所选模型。启动时自动检测主模型是否支持。")
     print("    也可配置独立视觉模型，仅在收到图片时调用。\n")
     has_vision_config = bool(existing.get("VISION_PROVIDER"))
@@ -284,14 +297,14 @@ def run_setup(data_dir: str = "./data") -> None:
     print()
 
     # --- Search ---
-    print("  [3/4] Exa 搜索（可选，回车跳过）")
+    print("  [3/5] Exa 搜索（可选，回车跳过）")
     exa_key = _ask_secret("Exa API Key", existing.get("EXA_API_KEY", ""))
     if exa_key:
         env["EXA_API_KEY"] = exa_key
     print()
 
     # --- Timezone ---
-    print("  [4/4] 时区\n")
+    print("  [4/5] 时区\n")
     cur_tz = existing.get("SCHEDULER_TZ", "")
     if cur_tz:
         print(f"    当前：{cur_tz}")
@@ -303,8 +316,13 @@ def run_setup(data_dir: str = "./data") -> None:
     else:
         _setup_timezone(env)
 
+    print()
+    print("  [5/5] 微信内更新\n")
+    _setup_wechat_update(env, existing)
+
     env["DATA_DIR"] = str(data)
     _write_env(env_file, env)
+    _write_updater_env(data / "updater.env", env)
 
     # --- WeChat Login ---
     print()
@@ -314,6 +332,7 @@ def run_setup(data_dir: str = "./data") -> None:
         if relogin.lower() not in ("y", "yes"):
             _request_restart(data)
             print("\n  ✓ 配置已更新！主服务会自动重启生效。")
+            _print_update_hint(env)
             print()
             return
 
@@ -343,6 +362,7 @@ def run_setup(data_dir: str = "./data") -> None:
     _request_restart(data)
     print()
     print("  ✓ 完成！启动：docker compose up -d")
+    _print_update_hint(env)
     print()
 
 
@@ -413,3 +433,41 @@ def _setup_timezone(env: dict[str, str]) -> None:
                 env["SCHEDULER_TZ"] = _TZ_OPTIONS[idx - 1][0]
                 break
         print(f"  请输入 0-{len(_TZ_OPTIONS)}")
+
+
+def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
+    current_enabled = _is_enabled(existing.get("WECHAT_UPDATE_ENABLED", ""))
+    if current_enabled:
+        print("    当前：已开启")
+    else:
+        print("    当前：未开启")
+    print("    开启后可在微信里发「检查更新」「更新叮咚」。")
+    print("    更新由独立 updater 服务执行，主程序不会直接访问 Docker。")
+    print()
+
+    default = "Y" if current_enabled or not existing else "N"
+    enable = _ask("开启微信内更新？(y/N)" if default == "N" else "开启微信内更新？(Y/n)", default)
+    token = existing.get("WATCHTOWER_HTTP_API_TOKEN", "").strip()
+    if not token:
+        token = secrets.token_urlsafe(32)
+        print(f"  已生成 updater 令牌：{_mask(token)}")
+    else:
+        print(f"  保留 updater 令牌：{_mask(token)}")
+    env["WATCHTOWER_HTTP_API_TOKEN"] = token
+
+    if enable.lower() not in ("y", "yes"):
+        env["WECHAT_UPDATE_ENABLED"] = "false"
+        print("  已关闭微信内更新。")
+        return
+
+    env["WECHAT_UPDATE_ENABLED"] = "true"
+    if existing.get("WATCHTOWER_URL"):
+        env["WATCHTOWER_URL"] = existing["WATCHTOWER_URL"]
+    print("  已开启微信内更新。")
+
+
+def _print_update_hint(env: dict[str, str]) -> None:
+    if not _is_enabled(env.get("WECHAT_UPDATE_ENABLED", "")):
+        return
+    print("  微信内更新已开启：docker compose up -d")
+    print("  之后微信里发「检查更新」或「更新叮咚」。")

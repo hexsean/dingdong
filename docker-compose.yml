@@ -3,7 +3,25 @@ services:
     image: hexsean/dingdong:${DINGDONG_VERSION:-latest}
     pull_policy: always
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     volumes:
       - ./data:/app/data
     tty: true
     stdin_open: true
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - path: ./data/updater.env
+        required: false
+    environment:
+      WATCHTOWER_HTTP_API_UPDATE: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+    command: ["--http-api-update", "--label-enable", "--cleanup"]
