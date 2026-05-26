@@ -51,25 +51,40 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   -t hexsean/dingdong:${VER} \
   --push .
 
-verify_image_version() {
+remote_digest() {
   local image="$1"
-  local got=""
+  local digest=""
   for _ in {1..12}; do
-    docker pull "$image" >/dev/null
-    got=$(docker run --rm --entrypoint cat "$image" /app/VERSION 2>/dev/null | tr -d '[:space:]' || true)
-    if [[ "$got" == "$VER" ]]; then
-      return 0
+    digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$image" 2>/dev/null || true)
+    if [[ "$digest" == sha256:* ]]; then
+      echo "$digest"
+      return
     fi
-    echo "等待镜像同步: ${image}"
+    echo "等待镜像同步: ${image}" >&2
     sleep 5
   done
-  echo "${image} 版本不匹配，期望 ${VER}，实际 ${got:-unknown}"
+  echo "无法读取镜像: ${image}" >&2
   exit 1
 }
 
-# 确认镜像仓库已能拉到新版本，再发布 GitHub 版本。
-verify_image_version "hexsean/dingdong:${VER}"
-verify_image_version "hexsean/dingdong:latest"
+verify_latest_tag() {
+  local version_digest="$1"
+  local latest_digest=""
+  for _ in {1..12}; do
+    latest_digest=$(remote_digest "hexsean/dingdong:latest")
+    if [[ "$latest_digest" == "$version_digest" ]]; then
+      return
+    fi
+    echo "等待 latest 标签同步" >&2
+    sleep 5
+  done
+  echo "latest 标签不匹配，期望 ${version_digest}，实际 ${latest_digest:-unknown}"
+  exit 1
+}
+
+# 确认远端 latest 已指向本次版本，再发布 GitHub 版本。
+VERSION_DIGEST=$(remote_digest "hexsean/dingdong:${VER}")
+verify_latest_tag "$VERSION_DIGEST"
 
 # 只有镜像推送成功后，才发布 GitHub 版本，避免用户收到更新提醒时镜像还没准备好。
 git tag -a "v${VER}" -m "$MSG"
@@ -79,6 +94,8 @@ if ! git push --atomic origin "HEAD:main" "refs/tags/v${VER}"; then
   exit 1
 fi
 
-docker tag hexsean/dingdong:${VER} hexsean/dingdong:latest
+if docker pull "hexsean/dingdong:${VER}" >/dev/null; then
+  docker tag "hexsean/dingdong:${VER}" hexsean/dingdong:latest
+fi
 
 echo "✓ v${VER} done"
