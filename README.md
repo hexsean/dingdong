@@ -5,9 +5,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/hexsean/dingdong.git && cd dingdong
-docker compose run --rm dingdong setup
-docker compose up -d
+git clone https://github.com/hexsean/dingdong.git && cd dingdong && docker compose run --rm dingdong setup && docker compose up -d
 ```
 
 `setup` 会完成模型、搜索、时区、微信登录和微信内更新配置。以后修改配置，只需要再次运行 `setup`，主服务会自动重启。
@@ -39,41 +37,75 @@ docker compose up -d
 
 ## 命令行
 
-Docker：
+配置：
 
 ```bash
 docker compose run --rm dingdong setup
+```
+
+查看状态：
+
+```bash
 docker compose run --rm dingdong status
+```
+
+清除登录态：
+
+```bash
 docker compose run --rm dingdong logout
+```
+
+启动或重启服务：
+
+```bash
 docker compose up -d
+```
+
+查看日志：
+
+```bash
 docker compose logs -f dingdong
 ```
 
-本地：
+本地开发启动：
+
+```bash
+python main.py start
+```
+
+本地配置：
 
 ```bash
 python main.py setup
-python main.py start
+```
+
+本地查看状态：
+
+```bash
 python main.py status
+```
+
+本地清除登录态：
+
+```bash
 python main.py logout
 ```
 
 ## 更新
 
-微信里更新：
+叮咚支持两种更新方式：日常使用推荐微信内更新；需要在服务器上操作时，用命令行更新。
+
+微信内更新会自动推送进度和完成消息：
 
 ```
 检查更新
 确认更新
 ```
 
-更新进度和完成消息会自动推送。
-
-命令行更新：
+命令行更新适合 SSH 到服务器后执行：
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose pull && docker compose up -d
 ```
 
 ## License
