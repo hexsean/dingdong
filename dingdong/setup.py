@@ -66,24 +66,38 @@ def _ask_secret(prompt: str, current: str = "") -> str:
     return _ask(prompt)
 
 
-def _test_model(provider_type: str, api_key: str, model: str, base_url: str = "") -> tuple[bool, str]:
-    """发送一条测试消息验证模型配置是否可用。"""
-    print(f"\n  测试 {model} ...", end=" ", flush=True)
+_TEST_IMAGE_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
+    "nGP4z8BQDwAEgAF/pooBPQAAAABJRU5ErkJggg=="
+)
+
+
+def _test_model(provider_type: str, api_key: str, model: str, base_url: str = "",
+                *, test_vision: bool = False) -> tuple[bool, str]:
+    """发送测试消息验证模型配置。test_vision=True 时额外发图片验证视觉能力。"""
+    label = f"{model} (视觉)" if test_vision else model
+    print(f"\n  测试 {label} ...", end=" ", flush=True)
+
+    if test_vision:
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "这张图片是什么颜色？只回复颜色名称。"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                         "data": _TEST_IMAGE_B64}}
+            if provider_type == "anthropic" else
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_TEST_IMAGE_B64}"}}
+        ]}]
+    else:
+        messages = [{"role": "user", "content": "Reply OK"}]
+
     try:
         if provider_type == "anthropic":
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
-            client.messages.create(
-                model=model, max_tokens=16,
-                messages=[{"role": "user", "content": "Reply OK"}],
-            )
+            client.messages.create(model=model, max_tokens=16, messages=messages)
         else:
             from openai import OpenAI
             client = OpenAI(api_key=api_key, base_url=base_url or "https://api.openai.com/v1")
-            client.chat.completions.create(
-                model=model, max_tokens=16,
-                messages=[{"role": "user", "content": "Reply OK"}],
-            )
+            client.chat.completions.create(model=model, max_tokens=16, messages=messages)
         print("✓ 通过")
         return True, ""
     except Exception as exc:
@@ -228,7 +242,19 @@ def run_setup(data_dir: str = "./data") -> None:
     if has_vision_config:
         cur_vmodel = existing.get("VISION_MODEL", "")
         print(f"    当前视觉模型：{cur_vmodel}")
-        action = _ask("操作：回车保留 / r 移除 / c 修改", "")
+
+        ok, _ = _test_model(
+            existing.get("VISION_PROVIDER", "openai"),
+            existing.get("VISION_API_KEY", ""),
+            cur_vmodel,
+            existing.get("VISION_BASE_URL", ""),
+            test_vision=True,
+        )
+        if ok:
+            action = _ask("操作：回车保留 / r 移除 / c 修改", "")
+        else:
+            action = _ask("测试未通过，建议修改。操作：c 修改 / r 移除 / 回车强制保留", "c")
+
         if action.lower() == "r":
             for k in ("VISION_PROVIDER", "VISION_API_KEY", "VISION_BASE_URL", "VISION_MODEL"):
                 env.pop(k, None)
@@ -334,6 +360,7 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
         ok, _ = _test_model(
             vp["type"], env["VISION_API_KEY"],
             env["VISION_MODEL"], env.get("VISION_BASE_URL", ""),
+            test_vision=True,
         )
         if ok:
             break

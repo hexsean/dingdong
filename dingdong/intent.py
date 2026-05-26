@@ -251,15 +251,32 @@ class IntentRouter:
                     "方案一：主模型换为 Claude Sonnet、GPT-4o 等视觉模型\n"
                     "方案二：在 .env 中单独配置视觉模型（VISION_PROVIDER / VISION_MODEL / VISION_API_KEY）")
 
-        if has_images:
+        use_direct_vision = has_images and not self._vision_llm
+        if has_images and self._vision_llm:
             image_desc = self._describe_images(image_bytes_list, text)
             user_text = f"{text}\n\n[图片内容：{image_desc}]" if text else f"[图片内容：{image_desc}]"
             self._store.append_message(owner_user_id, "user", user_text)
         else:
-            self._store.append_message(owner_user_id, "user", text)
+            self._store.append_message(owner_user_id, "user", text or "[图片]")
 
         history = self._store.get_history(owner_user_id, limit=self._history_limit)
         messages: list[dict[str, Any]] = list(history)
+
+        if use_direct_vision:
+            last_user = messages[-1] if messages and messages[-1]["role"] == "user" else None
+            if last_user:
+                content_parts: list[dict[str, Any]] = []
+                content_parts.append({"type": "text", "text": text or "请描述这张图片。"})
+                for img_data in image_bytes_list:
+                    content_parts.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": base64.b64encode(img_data).decode(),
+                        },
+                    })
+                last_user["content"] = content_parts
         for round_idx in range(MAX_TOOL_ROUNDS):
             tools = list(TOOL_SPECS)
             if search_available():
