@@ -55,7 +55,7 @@ def run_setup(data_dir: str = "./data") -> None:
     env: dict[str, str] = {}
 
     # --- LLM ---
-    print("  [1/3] 选择模型供应商\n")
+    print("  [1/4] 选择模型供应商\n")
     for i, p in enumerate(PROVIDERS, 1):
         tag = f"  ({p['tag']})" if p["tag"] else ""
         print(f"    {i}. {p['name']}{tag}")
@@ -87,15 +87,51 @@ def run_setup(data_dir: str = "./data") -> None:
             env["OPENAI_MODEL"] = _ask("Model", provider["model"])
     print()
 
+    # --- Vision ---
+    print("  [2/4] 图片理解\n")
+    if provider.get("vision"):
+        print(f"    {provider['name']} 已支持图片理解，无需额外配置。\n")
+    else:
+        print(f"    {provider['name']} 不支持图片。可选配一个视觉模型，发图时自动调用。")
+        print("    支持的视觉模型：Claude Sonnet、GPT-4o、GPT-4o-mini、Qwen-VL 等")
+        print("    不需要可直接回车跳过。\n")
+
+        _VISION_PROVIDERS = [
+            {"name": "OpenAI (GPT-4o-mini)", "type": "openai",
+             "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+            {"name": "Claude (Sonnet)", "type": "anthropic",
+             "base_url": "", "model": "claude-sonnet-4-6"},
+            {"name": "自定义", "type": "openai",
+             "base_url": "", "model": ""},
+        ]
+        print("    可选视觉模型：")
+        for i, vp in enumerate(_VISION_PROVIDERS, 1):
+            print(f"      {i}. {vp['name']}")
+        print()
+
+        v_raw = _ask("输入编号（回车跳过）")
+        if v_raw.isdigit() and 1 <= int(v_raw) <= len(_VISION_PROVIDERS):
+            vp = _VISION_PROVIDERS[int(v_raw) - 1]
+            env["VISION_PROVIDER"] = vp["type"]
+            env["VISION_API_KEY"] = _ask("视觉模型 API Key")
+            if vp["name"] == "自定义":
+                env["VISION_BASE_URL"] = _ask("Base URL")
+                env["VISION_MODEL"] = _ask("Model")
+            else:
+                if vp["base_url"]:
+                    env["VISION_BASE_URL"] = vp["base_url"]
+                env["VISION_MODEL"] = _ask("Model", vp["model"])
+    print()
+
     # --- Search ---
-    print("  [2/3] Exa 搜索（可选，回车跳过）")
+    print("  [3/4] Exa 搜索（可选，回车跳过）")
     exa_key = _ask("Exa API Key")
     if exa_key:
         env["EXA_API_KEY"] = exa_key
     print()
 
     # --- Timezone ---
-    print("  [3/3] 时区\n")
+    print("  [4/4] 时区\n")
     _TZ_OPTIONS = [
         ("Asia/Shanghai",     "北京/上海"),
         ("Asia/Tokyo",        "东京"),
