@@ -66,10 +66,13 @@ def _ask_secret(prompt: str, current: str = "") -> str:
     return _ask(prompt)
 
 
-_TEST_IMAGE_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
-    "nGP4z8BQDwAEgAF/pooBPQAAAABJRU5ErkJggg=="
-)
+def _make_test_image_b64() -> str:
+    import io, base64
+    from PIL import Image
+    img = Image.new("RGB", (16, 16), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def _test_model(provider_type: str, api_key: str, model: str, base_url: str = "",
@@ -79,12 +82,16 @@ def _test_model(provider_type: str, api_key: str, model: str, base_url: str = ""
     print(f"\n  测试 {label} ...", end=" ", flush=True)
 
     if test_vision:
+        img_b64 = _make_test_image_b64()
+        if provider_type == "anthropic":
+            image_part = {"type": "image", "source": {
+                "type": "base64", "media_type": "image/jpeg", "data": img_b64}}
+        else:
+            image_part = {"type": "image_url", "image_url": {
+                "url": f"data:image/jpeg;base64,{img_b64}"}}
         messages = [{"role": "user", "content": [
             {"type": "text", "text": "这张图片是什么颜色？只回复颜色名称。"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                         "data": _TEST_IMAGE_B64}}
-            if provider_type == "anthropic" else
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_TEST_IMAGE_B64}"}}
+            image_part,
         ]}]
     else:
         messages = [{"role": "user", "content": "Reply OK"}]
@@ -117,6 +124,8 @@ def _classify_error(exc: Exception) -> str:
         return "无权限访问该模型"
     if code == 404 or "not found" in msg.lower() or "does not exist" in msg.lower():
         return f"模型不存在，请检查模型名称"
+    if "image" in msg.lower() and ("format" in msg.lower() or "decode" in msg.lower()):
+        return "图片格式不支持，该模型可能不具备视觉能力"
     if code == 429 or "rate" in msg.lower():
         return "触发频率限制，请稍后重试"
     if "billing" in msg.lower() or "quota" in msg.lower() or "insufficient" in msg.lower():
