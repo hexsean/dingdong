@@ -2,19 +2,19 @@
 
 微信定时任务助手。通过 [OpenClaw](https://github.com/Tencent/openclaw-weixin) 接入个人微信，自然语言管理定时任务。
 
-## 快速开始
+## 安装
 
 ```bash
 git clone https://github.com/hexsean/dingdong.git && cd dingdong
-docker compose run --rm dingdong setup   # 选供应商、填 key、扫码
+docker compose run --rm dingdong setup
 docker compose up -d
 ```
 
-`setup` 会写入运行配置，默认开启微信内更新并生成 updater 令牌。
+`setup` 会完成模型、搜索、时区、微信登录和微信内更新配置。
 
-之后再次运行 `setup` 修改配置时，正在运行的主服务会自动重启并读取新配置。
+再次运行 `setup` 修改配置时，主服务会自动重启并读取新配置。
 
-## 用法
+## 微信使用
 
 微信里直接对话：
 
@@ -30,43 +30,71 @@ docker compose up -d
 > 清空对话
 ```
 
-## 命令
+常用指令：
 
 | 命令 | 说明 |
 |------|------|
-| `setup` | 交互式配置 + 扫码 |
-| `start` | 启动 |
+| `我有哪些任务` | 查看任务列表 |
+| `清空对话` | 重置对话历史 |
+| `检查更新` | 查看当前版本和新版本 |
+| `更新叮咚` | 在微信里更新到最新版本 |
+| `更新状态` | 查看更新结果 |
+
+## 命令行
+
+| 命令 | 说明 |
+|------|------|
+| `setup` | 配置向导 + 微信登录 |
+| `start` | 启动服务 |
 | `status` | 查看配置和任务 |
 | `logout` | 清除微信登录态 |
 
-Docker: `docker compose run --rm dingdong <命令>`
-本地: `python main.py <命令>`
+Docker：
+
+```bash
+docker compose run --rm dingdong <命令>
+```
+
+本地：
+
+```bash
+python main.py <命令>
+```
 
 ## 更新
 
-```bash
-docker compose pull
-docker compose up -d --force-recreate
+### 微信内更新
+
+默认 `latest` 部署可在微信里更新：
+
+```
+检查更新
+更新叮咚
+确认更新
 ```
 
-如果要固定到某个版本，把版本号传给 Compose：
-
-```bash
-DINGDONG_VERSION=0.3.x docker compose pull
-DINGDONG_VERSION=0.3.x docker compose up -d --force-recreate
-```
-
-### 微信里更新
-
-首次 `setup` 默认开启微信内更新并自动生成 updater 令牌。已有部署升级到本版本后，同步新版 `docker-compose.yml`，再重新运行一次：
+已有部署升级到支持微信内更新的版本后，同步新版 `docker-compose.yml`，执行一次：
 
 ```bash
 docker compose run --rm dingdong setup
 docker compose up -d
 ```
 
-之后微信里发「检查更新」查看版本，发「更新叮咚」并回复「确认更新」即可。
-微信更新适用于默认 `latest` 部署；如果使用 `DINGDONG_VERSION=...` 固定版本，请手动改版本号后更新。
+之后再修改配置只需要运行 `setup`。
+
+### 手动更新
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+固定版本部署：
+
+```bash
+DINGDONG_VERSION=0.5.1 docker compose pull
+DINGDONG_VERSION=0.5.1 docker compose up -d
+```
 
 ## License
 
