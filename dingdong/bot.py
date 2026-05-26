@@ -180,22 +180,16 @@ class Bot:
             log.info("update check disabled by user")
             return
         from apscheduler.triggers.interval import IntervalTrigger
-        self._scheduler._scheduler.add_job(
-            self._check_update,
-            trigger=IntervalTrigger(hours=1),
-            id=CHECK_ID,
-            replace_existing=True,
-            next_run_time=None,  # 不立即执行，等 24h
-        )
-        # 启动 30 秒后做一次首检
-        from apscheduler.triggers.date import DateTrigger
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(self._cfg.scheduler_tz)
+        first_run = datetime.now(tz) + timedelta(seconds=30)
         self._scheduler._scheduler.add_job(
             self._check_update,
-            trigger=DateTrigger(run_date=datetime.now(tz) + timedelta(seconds=30)),
-            id=f"{CHECK_ID}_init",
+            trigger=IntervalTrigger(hours=24, timezone=tz),
+            id=CHECK_ID,
+            replace_existing=True,
+            next_run_time=first_run,
         )
 
     def _check_update(self) -> None:
