@@ -437,7 +437,7 @@ class IntentRouter:
             name="watchtower-update",
         )
         t.start()
-        return "已触发更新，稍后会短暂重启。发「更新状态」可查看结果。"
+        return f"正在更新到 v{latest}，稍后会短暂重启。"
 
     def _update_status(self) -> str:
         result = read_update_result(self._store.db_path.parent)
@@ -453,18 +453,22 @@ class IntentRouter:
             "updater 令牌无效": "更新令牌无效",
             "updater is still working": "更新仍在执行",
             "updater 仍在执行": "更新仍在执行",
+            "triggered": "正在更新",
         }
         message = legacy_messages.get(message, message)
         if message.startswith("updater returned "):
             message = "更新服务返回 " + message.removeprefix("updater returned ")
         elif message.startswith("updater 返回 "):
             message = "更新服务返回 " + message.removeprefix("updater 返回 ")
-        if version and local_version() == version:
-            return f"更新完成：v{version}。"
+        lv = local_version()
+        if version and not is_newer_version(version, lv):
+            return f"更新完成：v{lv}。"
         if status == "running":
             return f"正在更新到 v{version}..."
         if status == "done":
-            return f"更新已触发：v{version}。如当前版本仍未变化，请稍后再查。"
+            return f"正在更新到 v{version}..."
+        if status == "pending":
+            return f"更新暂未生效：v{version}。请稍后再试。"
         if status == "failed":
             return f"更新失败：{message or '请稍后再试'}。"
         return f"更新状态：{status} {message}".strip()

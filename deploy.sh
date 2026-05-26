@@ -51,6 +51,26 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   -t hexsean/dingdong:${VER} \
   --push .
 
+verify_image_version() {
+  local image="$1"
+  local got=""
+  for _ in {1..12}; do
+    docker pull "$image" >/dev/null
+    got=$(docker run --rm --entrypoint cat "$image" /app/VERSION 2>/dev/null | tr -d '[:space:]' || true)
+    if [[ "$got" == "$VER" ]]; then
+      return 0
+    fi
+    echo "等待镜像同步: ${image}"
+    sleep 5
+  done
+  echo "${image} 版本不匹配，期望 ${VER}，实际 ${got:-unknown}"
+  exit 1
+}
+
+# 确认镜像仓库已能拉到新版本，再发布 GitHub 版本。
+verify_image_version "hexsean/dingdong:${VER}"
+verify_image_version "hexsean/dingdong:latest"
+
 # 只有镜像推送成功后，才发布 GitHub 版本，避免用户收到更新提醒时镜像还没准备好。
 git tag -a "v${VER}" -m "$MSG"
 if ! git push --atomic origin "HEAD:main" "refs/tags/v${VER}"; then
@@ -59,8 +79,6 @@ if ! git push --atomic origin "HEAD:main" "refs/tags/v${VER}"; then
   exit 1
 fi
 
-# buildx 跨平台构建不更新本地 tag，按版本号拉取确保本地同步
-docker pull hexsean/dingdong:${VER}
 docker tag hexsean/dingdong:${VER} hexsean/dingdong:latest
 
 echo "✓ v${VER} done"
