@@ -66,6 +66,15 @@ def _mask(val: str) -> str:
     return val[:4] + "***" + val[-4:]
 
 
+def _ask_secret(prompt: str, current: str = "") -> str:
+    """敏感字段输入，已有值时仅显示脱敏版本。"""
+    if current:
+        print(f"  当前: {_mask(current)}")
+        val = _ask(f"{prompt}（回车保留）")
+        return val if val else current
+    return _ask(prompt)
+
+
 def _load_env(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -150,21 +159,11 @@ def run_setup(data_dir: str = "./data") -> None:
 
     if provider["type"] == "anthropic":
         env["LLM_PROVIDER"] = "anthropic"
-        cur_key = existing.get("ANTHROPIC_API_KEY", "")
-        if cur_key:
-            print(f"  当前 API Key: {_mask(cur_key)}")
-            env["ANTHROPIC_API_KEY"] = _ask("API Key（回车保留）", cur_key)
-        else:
-            env["ANTHROPIC_API_KEY"] = _ask("API Key")
+        env["ANTHROPIC_API_KEY"] = _ask_secret("API Key", existing.get("ANTHROPIC_API_KEY", ""))
         env["ANTHROPIC_MODEL"] = _ask("Model", existing.get("ANTHROPIC_MODEL", provider["model"]))
     else:
         env["LLM_PROVIDER"] = "openai"
-        cur_key = existing.get("OPENAI_API_KEY", "")
-        if cur_key:
-            print(f"  当前 API Key: {_mask(cur_key)}")
-            env["OPENAI_API_KEY"] = _ask("API Key（回车保留）", cur_key)
-        else:
-            env["OPENAI_API_KEY"] = _ask("API Key")
+        env["OPENAI_API_KEY"] = _ask_secret("API Key", existing.get("OPENAI_API_KEY", ""))
         if provider["key"] == "custom":
             env["OPENAI_BASE_URL"] = _ask("Base URL", existing.get("OPENAI_BASE_URL", ""))
             env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", ""))
@@ -199,10 +198,7 @@ def run_setup(data_dir: str = "./data") -> None:
 
     # --- Search ---
     print("  [3/4] Exa 搜索（可选，回车跳过）")
-    cur_exa = existing.get("EXA_API_KEY", "")
-    if cur_exa:
-        print(f"  当前 Exa Key: {_mask(cur_exa)}")
-    exa_key = _ask("Exa API Key（回车保留）" if cur_exa else "Exa API Key", cur_exa)
+    exa_key = _ask_secret("Exa API Key", existing.get("EXA_API_KEY", ""))
     if exa_key:
         env["EXA_API_KEY"] = exa_key
     print()
@@ -271,12 +267,7 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
     if v_raw.isdigit() and 1 <= int(v_raw) <= len(_VISION_PROVIDERS):
         vp = _VISION_PROVIDERS[int(v_raw) - 1]
         env["VISION_PROVIDER"] = vp["type"]
-        cur_vkey = existing.get("VISION_API_KEY", "")
-        if cur_vkey:
-            print(f"  当前视觉模型 Key: {_mask(cur_vkey)}")
-            env["VISION_API_KEY"] = _ask("视觉模型 API Key（回车保留）", cur_vkey)
-        else:
-            env["VISION_API_KEY"] = _ask("视觉模型 API Key")
+        env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
         if vp["name"] == "自定义":
             env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
             env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
