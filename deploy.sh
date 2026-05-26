@@ -47,6 +47,7 @@ fi
 
 docker buildx build --platform linux/amd64,linux/arm64 \
   --pull \
+  --build-arg "DINGDONG_VERSION=${VER}" \
   -t hexsean/dingdong:latest \
   -t hexsean/dingdong:${VER} \
   --push .
@@ -82,9 +83,56 @@ verify_latest_tag() {
   exit 1
 }
 
+watchtower_digest() {
+  local tag="$1"
+  local token=""
+  local headers=""
+  local digest=""
+
+  token=$(curl -fsSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Ahexsean%2Fdingdong%3Apull" 2>/dev/null \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+  [[ -n "$token" ]] || return 1
+
+  headers=$(curl -fsSI \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+    -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+    -H "Accept: application/vnd.docker.distribution.manifest.v1+json" \
+    -H "Accept: application/vnd.oci.image.index.v1+json" \
+    "https://index.docker.io/v2/hexsean/dingdong/manifests/${tag}" 2>/dev/null || true)
+
+  digest=$(printf "%s\n" "$headers" | awk 'tolower($1) == "docker-content-digest:" { gsub("\r", "", $2); print $2; exit }')
+  [[ "$digest" == sha256:* ]] || return 1
+  echo "$digest"
+}
+
+wait_update_channel() {
+  local expected_digest="$1"
+  local digest=""
+  local stable=0
+
+  for _ in {1..30}; do
+    digest=$(watchtower_digest "latest" || true)
+    if [[ "$digest" == "$expected_digest" ]]; then
+      stable=$((stable + 1))
+      if [[ "$stable" -ge 2 ]]; then
+        return
+      fi
+    else
+      stable=0
+    fi
+    echo "等待更新通道同步" >&2
+    sleep 10
+  done
+
+  echo "更新通道未同步，期望 ${expected_digest}，实际 ${digest:-unknown}" >&2
+  exit 1
+}
+
 # 确认远端 latest 已指向本次版本，再发布 GitHub 版本。
 VERSION_DIGEST=$(remote_digest "hexsean/dingdong:${VER}")
 verify_latest_tag "$VERSION_DIGEST"
+wait_update_channel "$VERSION_DIGEST"
 
 # 只有镜像推送成功后，才发布 GitHub 版本，避免用户收到更新提醒时镜像还没准备好。
 git tag -a "v${VER}" -m "$MSG"

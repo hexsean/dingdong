@@ -496,7 +496,7 @@ class IntentRouter:
         if status == "done":
             return f"正在更新到 v{version}..."
         if status == "pending":
-            return f"更新暂未生效：v{version}。请稍后再试。"
+            return f"更新仍未完成：v{version}。可再发「确认更新」重试。"
         if status == "failed":
             return f"更新失败：{message or '请稍后再试'}。"
         return f"更新状态：{status} {message}".strip()

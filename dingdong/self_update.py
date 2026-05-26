@@ -7,7 +7,7 @@ from typing import Callable
 
 UPDATE_RESULT = ".update-result"
 DEFAULT_WATCHTOWER_URL = "http://watchtower:8080/v1/update"
-WATCHTOWER_RETRY_DELAYS_SECONDS = (20, 40, 60)
+WATCHTOWER_RETRY_DELAYS_SECONDS = (20, 40, 60, 90, 120, 180, 240, 300)
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def trigger_watchtower_update(
     context_token: str = "",
     notify: Callable[[str], None] | None = None,
 ) -> None:
-    from .updater import local_version
+    from .updater import is_newer_version, local_version
 
     write_update_result(
         data_dir,
@@ -104,20 +104,29 @@ def trigger_watchtower_update(
 
             if attempt == 1:
                 _notify_progress(notify, f"正在拉取 v{target_version}...")
+            log.info("triggering watchtower update attempt=%s target=%s", attempt, target_version)
             resp = requests.get(
                 url or DEFAULT_WATCHTOWER_URL,
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=(5, 600),
             )
             if 200 <= resp.status_code < 300:
-                if local_version() == target_version:
+                current_version = local_version()
+                log.info(
+                    "watchtower update returned status=%s attempt=%s target=%s current=%s",
+                    resp.status_code,
+                    attempt,
+                    target_version,
+                    current_version,
+                )
+                if not is_newer_version(target_version, current_version):
                     write_update_result(data_dir, status="done", target_version=target_version, message="更新完成", notified="1")
                     _notify_progress(notify, f"更新完成：v{target_version}。")
                     return
                 if attempt < len(delays):
                     continue
-                write_update_result(data_dir, status="pending", target_version=target_version, message="暂未生效")
-                _notify_progress(notify, f"更新暂未生效：v{target_version}。请稍后再试。")
+                write_update_result(data_dir, status="pending", target_version=target_version, message="仍未完成")
+                _notify_progress(notify, f"更新仍未完成：v{target_version}。可再发「确认更新」重试。")
                 return
             if resp.status_code in (401, 403):
                 write_update_result(data_dir, status="failed", target_version=target_version, message="更新令牌无效")
@@ -131,8 +140,10 @@ def trigger_watchtower_update(
             _notify_progress(notify, f"更新失败：更新服务返回 {resp.status_code}。")
             return
     except requests.Timeout:
+        log.info("watchtower update request still running target=%s", target_version)
         write_update_result(data_dir, status="running", target_version=target_version, message="更新仍在执行")
         _notify_progress(notify, f"正在更新到 v{target_version}，仍在执行...")
-    except Exception:
+    except Exception as exc:
+        log.warning("watchtower update request failed target=%s: %s", target_version, exc)
         write_update_result(data_dir, status="failed", target_version=target_version, message="无法连接更新服务")
         _notify_progress(notify, "更新失败：无法连接更新服务。")
