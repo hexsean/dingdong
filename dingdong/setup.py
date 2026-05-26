@@ -95,8 +95,37 @@ def run_setup(data_dir: str = "./data") -> None:
     print()
 
     # --- Timezone ---
-    print("  [3/3] 时区")
-    env["SCHEDULER_TZ"] = _ask("时区", "Asia/Shanghai")
+    print("  [3/3] 时区\n")
+    _TZ_OPTIONS = [
+        ("Asia/Shanghai",     "北京/上海"),
+        ("Asia/Tokyo",        "东京"),
+        ("Asia/Singapore",    "新加坡"),
+        ("America/New_York",  "纽约"),
+        ("America/Los_Angeles", "洛杉矶"),
+        ("Europe/London",     "伦敦"),
+    ]
+    for i, (tz_id, label) in enumerate(_TZ_OPTIONS, 1):
+        print(f"    {i}. {label} ({tz_id})")
+    print(f"    0. 自定义")
+    print()
+    while True:
+        raw_tz = _ask("输入编号", "1")
+        if raw_tz.isdigit():
+            idx = int(raw_tz)
+            if idx == 0:
+                custom_tz = _ask("IANA 时区（如 Asia/Hong_Kong）")
+                try:
+                    from zoneinfo import ZoneInfo
+                    ZoneInfo(custom_tz)
+                    env["SCHEDULER_TZ"] = custom_tz
+                    break
+                except (KeyError, Exception):
+                    print(f"  无效时区：{custom_tz}，请重新输入")
+                    continue
+            if 1 <= idx <= len(_TZ_OPTIONS):
+                env["SCHEDULER_TZ"] = _TZ_OPTIONS[idx - 1][0]
+                break
+        print(f"  请输入 0-{len(_TZ_OPTIONS)}")
     env["DATA_DIR"] = str(data)
 
     _write_env(env_file, env)
