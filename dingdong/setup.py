@@ -442,7 +442,6 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
     else:
         print("    当前：未开启")
     print("    开启后可在微信里发「检查更新」「更新叮咚」。")
-    print("    更新由独立 updater 服务执行，主程序不会直接访问 Docker。")
     print()
 
     default = "Y" if current_enabled or not existing else "N"
@@ -469,5 +468,4 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
 def _print_update_hint(env: dict[str, str]) -> None:
     if not _is_enabled(env.get("WECHAT_UPDATE_ENABLED", "")):
         return
-    print("  微信内更新已开启。若 updater 服务尚未创建，请执行：docker compose up -d")
-    print("  之后微信里发「检查更新」或「更新叮咚」。")
+    print("  微信内更新已开启。之后微信里发「检查更新」或「更新叮咚」。")

@@ -1,21 +1,10 @@
 from __future__ import annotations
 
-import logging
 import time
 from pathlib import Path
 
 UPDATE_RESULT = ".update-result"
 DEFAULT_WATCHTOWER_URL = "http://watchtower:8080/v1/update"
-
-log = logging.getLogger(__name__)
-
-
-def manual_update_command() -> str:
-    return "docker compose pull && docker compose up -d --force-recreate"
-
-
-def pinned_version_note() -> str:
-    return "微信更新适用于默认 latest 部署；固定 DINGDONG_VERSION 时请手动改版本号。"
 
 
 def update_configured(enabled: bool, token: str) -> bool:
@@ -60,13 +49,12 @@ def trigger_watchtower_update(data_dir: Path, *, url: str, token: str, target_ve
             timeout=(5, 600),
         )
         if 200 <= resp.status_code < 300:
-            write_update_result(data_dir, status="done", target_version=target_version, message="update requested")
+            write_update_result(data_dir, status="done", target_version=target_version, message="已触发")
         elif resp.status_code in (401, 403):
-            write_update_result(data_dir, status="failed", target_version=target_version, message="updater token invalid")
+            write_update_result(data_dir, status="failed", target_version=target_version, message="更新令牌无效")
         else:
-            write_update_result(data_dir, status="failed", target_version=target_version, message=f"updater returned {resp.status_code}")
+            write_update_result(data_dir, status="failed", target_version=target_version, message=f"更新服务返回 {resp.status_code}")
     except requests.Timeout:
-        write_update_result(data_dir, status="running", target_version=target_version, message="updater is still working")
-    except Exception as exc:
-        log.debug("watchtower update request failed: %s", exc)
-        write_update_result(data_dir, status="failed", target_version=target_version, message="cannot reach updater service")
+        write_update_result(data_dir, status="running", target_version=target_version, message="更新仍在执行")
+    except Exception:
+        write_update_result(data_dir, status="failed", target_version=target_version, message="无法连接更新服务")

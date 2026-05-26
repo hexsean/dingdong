@@ -18,8 +18,6 @@ from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
 from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
 from .self_update import (
-    manual_update_command,
-    pinned_version_note,
     read_update_result,
     trigger_watchtower_update,
     update_configured,
@@ -407,19 +405,14 @@ class IntentRouter:
             return f"当前版本 v{lv}，已是最新。"
         lines = [f"当前版本 v{lv}，最新版本 v{rv}。"]
         if self._can_wechat_update():
-            lines.append("发「更新叮咚」可在微信里更新。")
-            lines.append(pinned_version_note())
+            lines.append("发「更新叮咚」开始。")
         else:
-            lines.append(f"手动更新：{manual_update_command()}")
-            lines.append("微信更新未启用；运行 setup 开启后可在微信里更新。")
+            lines.append("微信更新未开启。")
         return "\n".join(lines)
 
     def _prepare_update(self, owner_user_id: str) -> str:
         if not self._can_wechat_update():
-            return (
-                "微信更新未开启。\n"
-                "运行 docker compose run --rm dingdong setup 开启，然后 docker compose up -d 生效。"
-            )
+            return "微信更新未开启。"
         lv = local_version()
         rv = remote_version()
         if rv is None:
@@ -427,7 +420,7 @@ class IntentRouter:
         if not is_newer_version(rv, lv):
             return f"当前版本 v{lv}，已是最新。"
         self._pending_update[owner_user_id] = rv
-        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n{pinned_version_note()}\n回复「确认更新」执行。"
+        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n回复「确认更新」执行。"
 
     def _start_update(self, owner_user_id: str, latest: str) -> str:
         if not self._can_wechat_update():
@@ -453,6 +446,19 @@ class IntentRouter:
         status = result.get("status", "unknown")
         version = result.get("target_version", "")
         message = result.get("message", "")
+        legacy_messages = {
+            "cannot reach updater service": "无法连接更新服务",
+            "无法连接 updater": "无法连接更新服务",
+            "updater token invalid": "更新令牌无效",
+            "updater 令牌无效": "更新令牌无效",
+            "updater is still working": "更新仍在执行",
+            "updater 仍在执行": "更新仍在执行",
+        }
+        message = legacy_messages.get(message, message)
+        if message.startswith("updater returned "):
+            message = "更新服务返回 " + message.removeprefix("updater returned ")
+        elif message.startswith("updater 返回 "):
+            message = "更新服务返回 " + message.removeprefix("updater 返回 ")
         if version and local_version() == version:
             return f"更新完成：v{version}。"
         if status == "running":
@@ -460,7 +466,7 @@ class IntentRouter:
         if status == "done":
             return f"更新已触发：v{version}。如当前版本仍未变化，请稍后再查。"
         if status == "failed":
-            return f"更新失败：{message or '请查看 updater 日志'}。"
+            return f"更新失败：{message or '请稍后再试'}。"
         return f"更新状态：{status} {message}".strip()
 
     def _can_wechat_update(self) -> bool:

@@ -24,4 +24,4 @@ services:
       WATCHTOWER_HTTP_API_UPDATE: "true"
       WATCHTOWER_LABEL_ENABLE: "true"
       WATCHTOWER_CLEANUP: "true"
-    command: ["--http-api-update", "--label-enable", "--cleanup"]
+    command: ["--api-version", "1.40", "--http-api-update", "--label-enable", "--cleanup"]
