@@ -35,6 +35,7 @@ GREETING_REPLY = "在的，有什么需要帮忙的？"
 UPDATE_KEYWORDS = {"更新叮咚", "升级叮咚", "立即更新", "开始更新"}
 UPDATE_STATUS_KEYWORDS = {"更新状态", "查看更新状态"}
 UPDATE_CONFIRM_KEYWORDS = {"确认更新", "确认升级"}
+CHECK_UPDATE_KEYWORDS = {"检查更新", "检查版本", "版本", "当前版本"}
 
 INTENT_SYSTEM_PROMPT = """\
 你是叮咚，微信定时任务助手。极简回复，不废话。
@@ -195,6 +196,7 @@ def _tool_status(name: str, args: dict[str, Any]) -> str | None:
 
 
 CONFIRM_KEYWORDS = {"确认", "确定", "是", "yes", "y"}
+CANCEL_KEYWORDS = {"取消", "不用", "不更新", "先不更新", "no", "n"}
 
 
 class IntentRouter:
@@ -211,6 +213,7 @@ class IntentRouter:
         self._scheduler = scheduler
         self._history_limit = history_limit
         self._on_status = None
+        self._on_update_progress = None
         self._pending_clear: set[str] = set()
         self._pending_update: dict[str, str] = {}
         self._model_info = model_info or ModelInfo(model_id="")
@@ -219,8 +222,9 @@ class IntentRouter:
         self._watchtower_url = watchtower_url
         self._watchtower_token = watchtower_token
 
-    def set_callbacks(self, *, on_status=None) -> None:
+    def set_callbacks(self, *, on_status=None, on_update_progress=None) -> None:
         self._on_status = on_status
+        self._on_update_progress = on_update_progress
 
     def handle(self, *, owner_user_id: str, context_token: str, text: str,
                image_bytes_list: list[bytes] | None = None) -> str:
@@ -229,10 +233,14 @@ class IntentRouter:
 
         if not has_images:
             if owner_user_id in self._pending_update:
-                latest = self._pending_update.pop(owner_user_id)
                 if stripped in UPDATE_CONFIRM_KEYWORDS or stripped.lower() in CONFIRM_KEYWORDS:
-                    return self._start_update(owner_user_id, latest)
-                return "已取消更新。"
+                    latest = self._pending_update.pop(owner_user_id)
+                    return self._start_update(owner_user_id, context_token, latest)
+                if stripped in CANCEL_KEYWORDS or stripped.lower() in CANCEL_KEYWORDS:
+                    self._pending_update.pop(owner_user_id, None)
+                    return "已取消更新。"
+                if stripped not in CHECK_UPDATE_KEYWORDS and stripped not in UPDATE_KEYWORDS and stripped not in UPDATE_STATUS_KEYWORDS:
+                    self._pending_update.pop(owner_user_id, None)
             if owner_user_id in self._pending_clear:
                 self._pending_clear.discard(owner_user_id)
                 if stripped.lower() in CONFIRM_KEYWORDS:
@@ -252,8 +260,10 @@ class IntentRouter:
             if stripped == "开启更新提醒":
                 set_disabled(self._store.db_path.parent, False)
                 return "已开启更新提醒。"
-            if stripped in {"检查更新", "版本", "当前版本"}:
+            if stripped in CHECK_UPDATE_KEYWORDS:
                 return self._check_update(owner_user_id)
+            if stripped in UPDATE_CONFIRM_KEYWORDS:
+                return self._confirm_update(owner_user_id, context_token)
             if stripped in UPDATE_STATUS_KEYWORDS:
                 return self._update_status()
             if stripped in UPDATE_KEYWORDS:
@@ -405,10 +415,20 @@ class IntentRouter:
             return f"当前版本 v{lv}，已是最新。"
         lines = [f"当前版本 v{lv}，最新版本 v{rv}。"]
         if self._can_wechat_update():
-            lines.append("发「更新叮咚」开始。")
+            self._pending_update[owner_user_id] = rv
+            lines.append("回复「确认更新」执行。")
         else:
             lines.append("微信更新未开启。")
         return "\n".join(lines)
+
+    def _confirm_update(self, owner_user_id: str, context_token: str) -> str:
+        lv = local_version()
+        rv = remote_version()
+        if rv is None:
+            return f"当前版本 v{lv}，无法连接更新服务器。"
+        if not is_newer_version(rv, lv):
+            return f"当前版本 v{lv}，已是最新。"
+        return self._start_update(owner_user_id, context_token, rv)
 
     def _prepare_update(self, owner_user_id: str) -> str:
         if not self._can_wechat_update():
@@ -422,9 +442,14 @@ class IntentRouter:
         self._pending_update[owner_user_id] = rv
         return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n回复「确认更新」执行。"
 
-    def _start_update(self, owner_user_id: str, latest: str) -> str:
+    def _start_update(self, owner_user_id: str, context_token: str, latest: str) -> str:
         if not self._can_wechat_update():
             return "微信更新未开启。"
+
+        def notify(text: str) -> None:
+            if self._on_update_progress:
+                self._on_update_progress(owner_user_id, context_token, text)
+
         t = threading.Thread(
             target=trigger_watchtower_update,
             kwargs={
@@ -432,12 +457,15 @@ class IntentRouter:
                 "url": self._watchtower_url,
                 "token": self._watchtower_token,
                 "target_version": latest,
+                "owner_user_id": owner_user_id,
+                "context_token": context_token,
+                "notify": notify,
             },
             daemon=True,
             name="watchtower-update",
         )
         t.start()
-        return f"正在更新到 v{latest}，稍后会短暂重启。"
+        return f"开始更新到 v{latest}，稍后会短暂重启。"
 
     def _update_status(self) -> str:
         result = read_update_result(self._store.db_path.parent)

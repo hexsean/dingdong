@@ -26,6 +26,7 @@ from .models import fetch_model_info
 from .restart import RESTART_CHECK_INTERVAL_SECONDS, restart_marker_signature
 from .scheduler import Scheduler
 from .search import init_exa
+from .self_update import read_update_result, write_update_result
 from .storage import JobStore
 from .updater import CHECK_ID, is_disabled, is_newer_version, local_version, remote_version
 
@@ -71,6 +72,7 @@ class Bot:
                                     watchtower_token=cfg.watchtower_token)
         self._intent.set_callbacks(
             on_status=self._send_status,
+            on_update_progress=self._send_update_progress,
         )
 
     def run(self) -> None:
@@ -78,6 +80,7 @@ class Bot:
         self._scheduler.start()
         self._register_update_check()
         self._start_restart_watcher()
+        self._notify_update_result_on_startup()
         log.info("v%s online; entering long-poll loop", local_version())
 
         session = load_session(self._cfg.session_path) or {}
@@ -190,6 +193,9 @@ class Bot:
             log.debug("send_text_partial failed, falling back to send_text")
             self._client.safe_send_text(user_id, text, context_token)
 
+    def _send_update_progress(self, user_id: str, context_token: str, text: str) -> None:
+        self._client.safe_send_text(user_id, text, context_token)
+
     def _show_typing(self, user_id: str, context_token: str) -> None:
         ticket = self._typing_tickets.get(user_id)
         if not ticket:
@@ -250,7 +256,7 @@ class Bot:
     def _notify_update(self, current: str, latest: str) -> None:
         msg = (
             f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
-            "更新：发「检查更新」查看可用方式\n"
+            "更新：发「检查更新」，再回复「确认更新」\n"
             "关闭提醒：发「关闭更新提醒」"
         )
         session = load_session(self._cfg.session_path) or {}
@@ -261,6 +267,27 @@ class Bot:
             if job.owner_user_id not in notified:
                 self._client.safe_send_text(job.owner_user_id, msg, job.context_token)
                 notified.add(job.owner_user_id)
+
+    def _notify_update_result_on_startup(self) -> None:
+        result = read_update_result(self._cfg.data_dir)
+        if not result or result.get("notified") == "1":
+            return
+        user_id = result.get("owner_user_id", "")
+        context_token = result.get("context_token", "")
+        target = result.get("target_version", "")
+        if not user_id or not context_token or not target:
+            return
+
+        lv = local_version()
+        if not is_newer_version(target, lv):
+            if self._client.safe_send_text(user_id, f"更新完成：v{lv}。", context_token):
+                write_update_result(self._cfg.data_dir, status="done", target_version=target, message="更新完成", notified="1")
+            return
+
+        if result.get("status") == "failed":
+            message = result.get("message") or "请稍后再试"
+            if self._client.safe_send_text(user_id, f"更新失败：{message}。", context_token):
+                write_update_result(self._cfg.data_dir, status="failed", target_version=target, message=message, notified="1")
 
     # ---------- shutdown ----------
 

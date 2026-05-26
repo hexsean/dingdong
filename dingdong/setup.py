@@ -441,7 +441,7 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
         print("    当前：已开启")
     else:
         print("    当前：未开启")
-    print("    开启后可在微信里发「检查更新」「更新叮咚」。")
+    print("    开启后可在微信里发「检查更新」，再回复「确认更新」。")
     print()
 
     default = "Y" if current_enabled or not existing else "N"
@@ -468,4 +468,4 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
 def _print_update_hint(env: dict[str, str]) -> None:
     if not _is_enabled(env.get("WECHAT_UPDATE_ENABLED", "")):
         return
-    print("  微信内更新已开启。之后微信里发「检查更新」或「更新叮咚」。")
+    print("  微信内更新已开启。之后微信里发「检查更新」，再回复「确认更新」。")
