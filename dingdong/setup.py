@@ -11,7 +11,7 @@ from pathlib import Path
 
 PROVIDERS = [
     # --- Anthropic 原生 ---
-    {"key": "anthropic",  "name": "Anthropic (Claude)", "type": "anthropic",
+    {"key": "anthropic",  "name": "Anthropic",           "type": "anthropic",
      "base_url": "", "model": "claude-sonnet-4-6"},
     # --- OpenAI 原生 ---
     {"key": "openai-com", "name": "OpenAI",             "type": "openai",
@@ -124,10 +124,7 @@ def run_setup(data_dir: str = "./data") -> None:
     # --- LLM ---
     print("  [1/4] 选择模型渠道\n")
     current = _detect_provider(existing)
-    _GROUPS = {0: "原生", 2: "OpenAI 兼容"}
     for i, p in enumerate(PROVIDERS):
-        if i in _GROUPS:
-            print(f"    ── {_GROUPS[i]} ──")
         mark = " ←当前" if current and p["key"] == current["key"] else ""
         print(f"    {i + 1}. {p['name']}{mark}")
     print()
