@@ -21,6 +21,7 @@ class Config:
     exa_api_key: str
     history_limit: int
     allowed_user_ids: frozenset[str]
+    vision_enabled: bool | None  # True/False=手动覆盖, None=自动检测
 
     @property
     def db_path(self) -> Path:
@@ -49,6 +50,13 @@ def load_config() -> Config:
     raw_allowed = os.getenv("ALLOWED_USER_IDS", "").strip()
     allowed = frozenset(x.strip() for x in raw_allowed.split(",") if x.strip())
 
+    raw_vision = os.getenv("VISION_ENABLED", "").strip().lower()
+    vision_enabled: bool | None = None
+    if raw_vision in ("true", "1", "yes"):
+        vision_enabled = True
+    elif raw_vision in ("false", "0", "no"):
+        vision_enabled = False
+
     return Config(
         llm_provider=provider,
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
@@ -62,4 +70,5 @@ def load_config() -> Config:
         exa_api_key=os.getenv("EXA_API_KEY", ""),
         history_limit=int(os.getenv("HISTORY_LIMIT", "20")),
         allowed_user_ids=allowed,
+        vision_enabled=vision_enabled,
     )

@@ -8,21 +8,21 @@ from pathlib import Path
 
 PROVIDERS = [
     {"key": "openrouter-free", "name": "OpenRouter",   "tag": "免费",         "type": "openai",
-     "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/free"},
+     "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/free", "vision": False},
     {"key": "siliconflow",     "name": "硅基流动",      "tag": "免费额度",     "type": "openai",
-     "base_url": "https://api.siliconflow.cn/v1", "model": "Qwen/Qwen3-8B"},
+     "base_url": "https://api.siliconflow.cn/v1", "model": "Qwen/Qwen3-8B", "vision": False},
     {"key": "zhipu",           "name": "智谱 GLM",      "tag": "免费额度",     "type": "openai",
-     "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash"},
+     "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash", "vision": False},
     {"key": "deepseek",        "name": "DeepSeek",      "tag": "",            "type": "openai",
-     "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
+     "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "vision": False},
     {"key": "moonshot",        "name": "Moonshot",      "tag": "",            "type": "openai",
-     "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
-    {"key": "anthropic",       "name": "Claude",        "tag": "",            "type": "anthropic",
-     "base_url": "", "model": "claude-sonnet-4-6"},
-    {"key": "openai",          "name": "OpenAI",        "tag": "",            "type": "openai",
-     "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+     "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k", "vision": False},
+    {"key": "anthropic",       "name": "Claude",        "tag": "支持图片",    "type": "anthropic",
+     "base_url": "", "model": "claude-sonnet-4-6", "vision": True},
+    {"key": "openai",          "name": "OpenAI",        "tag": "支持图片",    "type": "openai",
+     "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "vision": True},
     {"key": "custom",          "name": "自定义",         "tag": "",            "type": "openai",
-     "base_url": "", "model": ""},
+     "base_url": "", "model": "", "vision": False},
 ]
 
 

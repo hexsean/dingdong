@@ -16,15 +16,41 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import requests
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.padding import PKCS7
 
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://ilinkai.weixin.qq.com"
+CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 CHANNEL_VERSION = "1.0.2"
 
 
 class ILinkError(RuntimeError):
     """非 0 返回码或网络错误。"""
+
+
+@dataclass
+class ImageAttachment:
+    encrypt_query_param: str
+    aes_key: str
+    encrypt_type: int = 1
+
+
+def _decode_aes_key(raw_b64: str, is_image: bool = True) -> bytes:
+    decoded = base64.b64decode(raw_b64)
+    if len(decoded) == 16:
+        return decoded
+    # file/voice/video: base64 → hex string → bytes
+    return bytes.fromhex(decoded.decode("ascii"))
+
+
+def _aes_ecb_decrypt(data: bytes, key: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.ECB())
+    decryptor = cipher.decryptor()
+    padded = decryptor.update(data) + decryptor.finalize()
+    unpadder = PKCS7(128).unpadder()
+    return unpadder.update(padded) + unpadder.finalize()
 
 
 @dataclass
@@ -36,6 +62,7 @@ class InboundMessage:
     text: str
     context_token: str
     message_type: int
+    images: list[ImageAttachment] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -60,6 +87,23 @@ def _extract_text(item_list: list[dict[str, Any]]) -> str:
             if text:
                 parts.append(text)
     return "\n".join(parts)
+
+
+def _extract_images(item_list: list[dict[str, Any]]) -> list[ImageAttachment]:
+    images: list[ImageAttachment] = []
+    for item in item_list or []:
+        if item.get("type") == 2:
+            img = item.get("image_item") or {}
+            media = img.get("media") or {}
+            eqp = media.get("encrypt_query_param")
+            aes_key = media.get("aes_key")
+            if eqp and aes_key:
+                images.append(ImageAttachment(
+                    encrypt_query_param=eqp,
+                    aes_key=aes_key,
+                    encrypt_type=media.get("encrypt_type", 1),
+                ))
+    return images
 
 
 class ILinkClient:
@@ -171,6 +215,7 @@ class ILinkClient:
                     text=_extract_text(raw.get("item_list", [])),
                     context_token=raw.get("context_token", ""),
                     message_type=raw.get("message_type", 1),
+                    images=_extract_images(raw.get("item_list", [])),
                     raw=raw,
                 )
             )
@@ -254,6 +299,21 @@ class ILinkClient:
             return False
 
     # ---------- helpers ----------
+
+    def download_image(self, img: ImageAttachment) -> bytes:
+        """从 CDN 下载并解密图片，返回原始图片字节。"""
+        url = f"{CDN_BASE_URL}/download"
+        try:
+            resp = self._session.get(
+                url,
+                params={"encrypted_query_param": img.encrypt_query_param},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise ILinkError(f"image download failed: {exc}") from exc
+        key = _decode_aes_key(img.aes_key, is_image=True)
+        return _aes_ecb_decrypt(resp.content, key)
 
     def safe_send_text(self, to_user_id: str, text: str, context_token: str, *, retries: int = 2) -> bool:
         """带重试的发送；失败仅记日志，不抛异常。返回是否成功。"""

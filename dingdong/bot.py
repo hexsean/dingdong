@@ -22,6 +22,7 @@ from .ilink import ILinkClient, ILinkError
 from .intent import IntentRouter
 from .llm import build_provider
 from .login import ensure_login, load_session, save_session
+from .models import fetch_model_info
 from .scheduler import Scheduler
 from .search import init_exa
 from .storage import JobStore
@@ -52,7 +53,12 @@ class Bot:
         )
         self._executor = JobExecutor(self._llm, self._client, self._store, tz=cfg.scheduler_tz)
         self._scheduler = Scheduler(self._store, self._executor.run, cfg.scheduler_tz)
-        self._intent = IntentRouter(self._llm, self._store, self._scheduler, history_limit=cfg.history_limit)
+        model_name = cfg.anthropic_model if cfg.llm_provider == "anthropic" else cfg.openai_model
+        self._model_info = fetch_model_info(
+            model_name, data_dir=cfg.data_dir, vision_override=cfg.vision_enabled,
+        )
+        self._intent = IntentRouter(self._llm, self._store, self._scheduler,
+                                    history_limit=cfg.history_limit, model_info=self._model_info)
         self._intent.set_callbacks(
             on_status=self._send_status,
         )
@@ -101,7 +107,8 @@ class Bot:
 
     def _handle_message(self, msg: Any) -> None:
         text = (msg.text or "").strip()
-        if not text:
+        images = getattr(msg, "images", []) or []
+        if not text and not images:
             return
         owner = msg.from_user_id
         ctx = msg.context_token
@@ -111,13 +118,23 @@ class Bot:
             self._client.safe_send_text(owner, "你不在该 bot 的允许列表中。", ctx)
             return
 
-        log.info("inbound from %s: %s", owner, text[:120])
+        image_bytes_list: list[bytes] = []
+        for img in images:
+            try:
+                data = self._client.download_image(img)
+                image_bytes_list.append(data)
+                log.info("downloaded image (%d bytes) from %s", len(data), owner)
+            except Exception:
+                log.exception("image download failed")
+
+        log.info("inbound from %s: %s (images: %d)", owner, text[:120], len(image_bytes_list))
         typing_stop = self._start_typing_loop(owner, ctx)
         try:
             reply = self._intent.handle(
                 owner_user_id=owner,
                 context_token=ctx,
                 text=text,
+                image_bytes_list=image_bytes_list,
             )
         except Exception as exc:
             log.exception("intent handling failed")

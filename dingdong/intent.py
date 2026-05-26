@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from datetime import datetime
@@ -188,57 +189,87 @@ CONFIRM_KEYWORDS = {"确认", "确定", "是", "yes", "y"}
 
 
 class IntentRouter:
-    def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *, history_limit: int = 20) -> None:
+    def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *,
+                 history_limit: int = 20, model_info: "ModelInfo | None" = None) -> None:
+        from .models import ModelInfo
         self._llm = llm
         self._store = store
         self._scheduler = scheduler
         self._history_limit = history_limit
         self._on_status = None
         self._pending_clear: set[str] = set()
+        self._model_info = model_info or ModelInfo(model_id="")
+        self._vision_supported = self._model_info.supports_vision
 
     def set_callbacks(self, *, on_status=None) -> None:
         self._on_status = on_status
 
-    def handle(self, *, owner_user_id: str, context_token: str, text: str) -> str:
+    def handle(self, *, owner_user_id: str, context_token: str, text: str,
+               image_bytes_list: list[bytes] | None = None) -> str:
         stripped = text.strip()
-        if owner_user_id in self._pending_clear:
-            self._pending_clear.discard(owner_user_id)
-            if stripped.lower() in CONFIRM_KEYWORDS:
-                n = self._store.clear_history(owner_user_id)
-                return f"已清空对话记录（{n} 条）。"
-            return "已取消。"
-        if stripped in CLEAR_KEYWORDS:
-            self._pending_clear.add(owner_user_id)
-            return "确认清空所有对话记录？回复「确认」执行。"
-        if stripped.lower() in GREETING_KEYWORDS:
-            self._store.append_message(owner_user_id, "user", text)
-            self._store.append_message(owner_user_id, "assistant", GREETING_REPLY)
-            return GREETING_REPLY
-        if stripped == "关闭更新提醒":
-            set_disabled(self._store.db_path.parent, True)
-            return "已关闭更新提醒。发「开启更新提醒」可恢复。"
-        if stripped == "开启更新提醒":
-            set_disabled(self._store.db_path.parent, False)
-            return "已开启更新提醒。"
-        if stripped in {"检查更新", "版本", "当前版本"}:
-            lv = local_version()
-            rv = remote_version()
-            if rv is None:
-                return f"当前版本 v{lv}，无法连接更新服务器。"
-            if rv != lv:
-                return f"当前版本 v{lv}，最新版本 v{rv}。\n更新：docker compose pull && docker compose up -d"
-            return f"当前版本 v{lv}，已是最新。"
+        has_images = bool(image_bytes_list)
 
-        shortcut = self._try_shortcut(stripped, owner_user_id)
-        if shortcut is not None:
-            self._store.append_message(owner_user_id, "user", text)
-            self._store.append_message(owner_user_id, "assistant", shortcut)
-            return shortcut
+        if not has_images:
+            if owner_user_id in self._pending_clear:
+                self._pending_clear.discard(owner_user_id)
+                if stripped.lower() in CONFIRM_KEYWORDS:
+                    n = self._store.clear_history(owner_user_id)
+                    return f"已清空对话记录（{n} 条）。"
+                return "已取消。"
+            if stripped in CLEAR_KEYWORDS:
+                self._pending_clear.add(owner_user_id)
+                return "确认清空所有对话记录？回复「确认」执行。"
+            if stripped.lower() in GREETING_KEYWORDS:
+                self._store.append_message(owner_user_id, "user", text)
+                self._store.append_message(owner_user_id, "assistant", GREETING_REPLY)
+                return GREETING_REPLY
+            if stripped == "关闭更新提醒":
+                set_disabled(self._store.db_path.parent, True)
+                return "已关闭更新提醒。发「开启更新提醒」可恢复。"
+            if stripped == "开启更新提醒":
+                set_disabled(self._store.db_path.parent, False)
+                return "已开启更新提醒。"
+            if stripped in {"检查更新", "版本", "当前版本"}:
+                lv = local_version()
+                rv = remote_version()
+                if rv is None:
+                    return f"当前版本 v{lv}，无法连接更新服务器。"
+                if rv != lv:
+                    return f"当前版本 v{lv}，最新版本 v{rv}。\n更新：docker compose pull && docker compose up -d"
+                return f"当前版本 v{lv}，已是最新。"
 
-        self._store.append_message(owner_user_id, "user", text)
+            shortcut = self._try_shortcut(stripped, owner_user_id)
+            if shortcut is not None:
+                self._store.append_message(owner_user_id, "user", text)
+                self._store.append_message(owner_user_id, "assistant", shortcut)
+                return shortcut
+
+        if has_images and not self._vision_supported:
+            return "当前配置的模型不支持图片理解，请在 .env 中切换为支持视觉的模型（如 Claude Sonnet、GPT-4o、Qwen-VL 等）。"
+
+        self._store.append_message(owner_user_id, "user", text or "[图片]")
         history = self._store.get_history(owner_user_id, limit=self._history_limit)
 
         messages: list[dict[str, Any]] = list(history)
+
+        if has_images:
+            last_user = messages[-1] if messages and messages[-1]["role"] == "user" else None
+            if last_user:
+                content_parts: list[dict[str, Any]] = []
+                if last_user.get("content"):
+                    content_parts.append({"type": "text", "text": last_user["content"]})
+                else:
+                    content_parts.append({"type": "text", "text": "请描述这张图片。"})
+                for img_data in image_bytes_list:
+                    content_parts.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": base64.b64encode(img_data).decode(),
+                        },
+                    })
+                last_user["content"] = content_parts
         for round_idx in range(MAX_TOOL_ROUNDS):
             tools = list(TOOL_SPECS)
             if search_available():

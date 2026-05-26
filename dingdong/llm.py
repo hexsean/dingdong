@@ -126,13 +126,21 @@ class OpenAIProvider:
             if isinstance(content, str):
                 out.append({"role": role, "content": content})
                 continue
-            # assistant turn containing text and/or tool_use
             text_parts: list[str] = []
+            image_parts: list[dict[str, Any]] = []
             tool_calls: list[dict[str, Any]] = []
             tool_results: list[dict[str, Any]] = []
             for part in content:
                 if part["type"] == "text":
                     text_parts.append(part["text"])
+                elif part["type"] == "image":
+                    src = part.get("source", {})
+                    media_type = src.get("media_type", "image/jpeg")
+                    data = src.get("data", "")
+                    image_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{data}"},
+                    })
                 elif part["type"] == "tool_use":
                     tool_calls.append(
                         {
@@ -165,7 +173,13 @@ class OpenAIProvider:
                     msg_out["reasoning_content"] = rc
                 out.append(msg_out)
             else:
-                if text_parts:
+                if image_parts:
+                    multimodal: list[dict[str, Any]] = []
+                    if text_parts:
+                        multimodal.append({"type": "text", "text": "\n".join(text_parts)})
+                    multimodal.extend(image_parts)
+                    out.append({"role": role, "content": multimodal})
+                elif text_parts:
                     out.append({"role": role, "content": "\n".join(text_parts)})
                 out.extend(tool_results)
         return out
