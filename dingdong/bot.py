@@ -23,6 +23,7 @@ from .intent import IntentRouter
 from .llm import build_provider, build_vision_provider
 from .login import ensure_login, load_session, save_session
 from .models import fetch_model_info
+from .restart import RESTART_CHECK_INTERVAL_SECONDS, restart_marker_signature
 from .scheduler import Scheduler
 from .search import init_exa
 from .storage import JobStore
@@ -73,6 +74,7 @@ class Bot:
         self._install_signal_handlers()
         self._scheduler.start()
         self._register_update_check()
+        self._start_restart_watcher()
         log.info("v%s online; entering long-poll loop", local_version())
 
         session = load_session(self._cfg.session_path) or {}
@@ -157,6 +159,24 @@ class Bot:
         else:
             log.warning("intent returned empty reply")
         self._cancel_typing(owner, ctx)
+
+    # ---------- config restart ----------
+
+    def _start_restart_watcher(self) -> None:
+        seen = restart_marker_signature(self._cfg.data_dir)
+
+        def _watch() -> None:
+            nonlocal seen
+            while not self._stop.wait(RESTART_CHECK_INTERVAL_SECONDS):
+                current = restart_marker_signature(self._cfg.data_dir)
+                if current is None or current == seen:
+                    continue
+                log.info("configuration updated by setup; restarting service")
+                self._stop.set()
+                break
+
+        t = threading.Thread(target=_watch, daemon=True, name="restart-watch")
+        t.start()
 
     # ---------- feedback ----------
 

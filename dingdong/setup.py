@@ -156,6 +156,11 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     print(f"\n  配置已保存到 {path}")
 
 
+def _request_restart(data: Path) -> None:
+    from .restart import request_service_restart
+    request_service_restart(data)
+
+
 def _detect_provider(existing: dict[str, str]) -> dict | None:
     """从已有配置推断当前渠道。"""
     prov = existing.get("LLM_PROVIDER", "")
@@ -307,7 +312,8 @@ def run_setup(data_dir: str = "./data") -> None:
     if session_path.exists():
         relogin = _ask("已有登录态，重新登录？(y/N)", "N")
         if relogin.lower() not in ("y", "yes"):
-            print("\n  ✓ 配置已更新！重启生效：docker compose restart")
+            _request_restart(data)
+            print("\n  ✓ 配置已更新！主服务会自动重启生效。")
             print()
             return
 
@@ -334,6 +340,7 @@ def run_setup(data_dir: str = "./data") -> None:
         print("  配置已保存，稍后重新运行 setup 即可登录。")
         sys.exit(1)
 
+    _request_restart(data)
     print()
     print("  ✓ 完成！启动：docker compose up -d")
     print()

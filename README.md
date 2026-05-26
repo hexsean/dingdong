@@ -10,6 +10,8 @@ docker compose run --rm dingdong setup   # 选供应商、填 key、扫码
 docker compose up -d
 ```
 
+之后再次运行 `setup` 修改配置时，正在运行的主服务会自动重启并读取新配置。
+
 ## 用法
 
 微信里直接对话：
