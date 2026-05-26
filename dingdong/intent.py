@@ -295,7 +295,8 @@ class IntentRouter:
 
     def _system_prompt(self) -> str:
         now = datetime.now(self._tz())
-        return INTENT_SYSTEM_PROMPT + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        weekday = "星期" + "一二三四五六日"[now.weekday()]
+        return INTENT_SYSTEM_PROMPT + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}\n"
 
     # ---------- shortcuts (skip LLM entirely,仅精确匹配) ----------
 
@@ -313,7 +314,8 @@ class IntentRouter:
         try:
             if name == "get_current_time":
                 now = datetime.now(self._tz())
-                return now.strftime("%Y-%m-%d %H:%M:%S %Z (星期%w)").replace("星期0","星期日").replace("星期1","星期一").replace("星期2","星期二").replace("星期3","星期三").replace("星期4","星期四").replace("星期5","星期五").replace("星期6","星期六")
+                weekday = "星期" + "一二三四五六日"[now.weekday()]
+                return f"{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}"
             if name == "list_jobs":
                 return self._tool_list_jobs(owner_user_id)
             if name == "create_job":

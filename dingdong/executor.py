@@ -51,13 +51,17 @@ class JobExecutor:
         status = "delivered" if ok else "send-failed"
         self._store.record_run(job.id, f"{status}: {content[:400]}")
         if job.schedule_kind == "date":
-            self._store.delete(job.id)
-            log.info("one-shot job %s (%s) cleaned up", job.id, job.name)
+            if ok:
+                self._store.delete(job.id)
+                log.info("one-shot job %s (%s) cleaned up", job.id, job.name)
+            else:
+                log.error("one-shot job %s (%s) send failed; kept for manual retry", job.id, job.name)
 
     def _generate(self, job: Job) -> str:
         now = datetime.now(self._tz)
+        weekday = "星期" + "一二三四五六日"[now.weekday()]
         user_prompt = (
-            f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}\n"
             f"任务名称：{job.name}\n"
             f"任务目标描述：{job.goal}\n\n"
             "请根据该目标，生成本次应该发给用户的微信消息内容。"

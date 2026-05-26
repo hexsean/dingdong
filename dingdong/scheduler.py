@@ -146,5 +146,6 @@ class Scheduler:
             return
         try:
             self._runner(job)
-        except Exception:
+        except Exception as exc:
             log.exception("job %s runner crashed", job_id)
+            self._store.record_run(job_id, f"crash: {exc}")
