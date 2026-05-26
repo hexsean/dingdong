@@ -227,7 +227,7 @@ class Bot:
     def _notify_update(self, current: str, latest: str) -> None:
         msg = (
             f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
-            f"更新：docker pull hexsean/dingdong:{latest} && docker compose up -d\n"
+            "更新：docker compose pull && docker compose up -d --force-recreate\n"
             "关闭提醒：发「关闭更新提醒」"
         )
         session = load_session(self._cfg.session_path) or {}

@@ -1,6 +1,7 @@
 services:
   dingdong:
     image: hexsean/dingdong:${DINGDONG_VERSION:-latest}
+    pull_policy: always
     restart: unless-stopped
     volumes:
       - ./data:/app/data

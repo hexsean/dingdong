@@ -41,7 +41,15 @@ Docker: `docker compose run --rm dingdong <命令>`
 ## 更新
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose pull
+docker compose up -d --force-recreate
+```
+
+如果要固定到某个版本，把版本号传给 Compose：
+
+```bash
+DINGDONG_VERSION=0.3.x docker compose pull
+DINGDONG_VERSION=0.3.x docker compose up -d --force-recreate
 ```
 
 ## License

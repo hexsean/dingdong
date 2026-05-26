@@ -55,7 +55,9 @@ def cmd_logout(_args: argparse.Namespace) -> int:
 def cmd_status(_args: argparse.Namespace) -> int:
     from dingdong.config import load_config
     from dingdong.storage import JobStore
+    from dingdong.updater import local_version
     cfg = load_config()
+    print(f"版本:     v{local_version()}")
     print(f"LLM:      {cfg.llm_provider}")
     print(f"数据目录: {cfg.data_dir}")
     print(f"时区:     {cfg.scheduler_tz}")
