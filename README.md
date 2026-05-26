@@ -40,23 +40,23 @@ docker compose up -d
 
 ## 命令行
 
-| 命令 | 说明 |
-|------|------|
-| `setup` | 配置向导 + 微信登录 |
-| `start` | 启动服务 |
-| `status` | 查看配置和任务 |
-| `logout` | 清除微信登录态 |
-
 Docker：
 
 ```bash
-docker compose run --rm dingdong <命令>
+docker compose run --rm dingdong setup
+docker compose run --rm dingdong status
+docker compose run --rm dingdong logout
+docker compose up -d
+docker compose logs -f dingdong
 ```
 
 本地：
 
 ```bash
-python main.py <命令>
+python main.py setup
+python main.py start
+python main.py status
+python main.py logout
 ```
 
 ## 更新
@@ -68,15 +68,6 @@ python main.py <命令>
 更新叮咚
 确认更新
 更新状态
-```
-
-旧版本升级到支持微信内更新：
-
-```bash
-git pull
-docker compose pull
-docker compose run --rm dingdong setup
-docker compose up -d
 ```
 
 命令行更新：
