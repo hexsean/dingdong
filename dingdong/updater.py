@@ -37,8 +37,6 @@ def remote_version() -> str | None:
     version = remote_image_version()
     if version:
         return version
-    if not _allow_github_version_fallback():
-        return None
     return remote_file_version()
 
 
@@ -51,10 +49,6 @@ def remote_file_version() -> str | None:
         log.debug("fetch remote version failed: %s", exc)
     return None
 
-
-def _allow_github_version_fallback() -> bool:
-    local_tuple = _version_tuple(local_version())
-    return local_tuple is not None and local_tuple < (0, 6, 2)
 
 
 def remote_image_version() -> str | None:
