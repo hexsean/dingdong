@@ -1,6 +1,7 @@
 """版本更新检测。
 
-启动时注册系统级定时任务（不在用户任务列表中），每 24 小时检查一次 GitHub 上的 VERSION 文件。
+Bot 启动后注册系统级定时任务（不在用户任务列表中），每 1 分钟优先检查
+Docker Hub latest 镜像标签中的版本；仅在旧版本兼容场景下回退到 GitHub VERSION 文件。
 """
 
 from __future__ import annotations

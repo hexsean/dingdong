@@ -41,6 +41,7 @@ class Bot:
         init_exa(cfg.exa_api_key)
         self._stop = threading.Event()
         self._typing_tickets: dict[str, str] = {}
+        self._last_update_notice_version: str | None = None
 
         def factory(token: str | None) -> ILinkClient:
             return ILinkClient(
@@ -238,7 +239,7 @@ class Bot:
         first_run = datetime.now(tz) + timedelta(seconds=30)
         self._scheduler._scheduler.add_job(
             self._check_update,
-            trigger=IntervalTrigger(hours=24, timezone=tz),
+            trigger=IntervalTrigger(minutes=1, timezone=tz),
             id=CHECK_ID,
             replace_existing=True,
             next_run_time=first_run,
@@ -250,23 +251,28 @@ class Bot:
         rv = remote_version()
         lv = local_version()
         if rv and is_newer_version(rv, lv):
+            if rv == self._last_update_notice_version:
+                return
             log.info("new version available: %s (current: %s)", rv, lv)
-            self._notify_update(lv, rv)
+            if self._notify_update(lv, rv):
+                self._last_update_notice_version = rv
 
-    def _notify_update(self, current: str, latest: str) -> None:
+    def _notify_update(self, current: str, latest: str) -> bool:
         msg = (
             f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
             "更新：发「检查更新」，再回复「确认更新」\n"
             "关闭提醒：发「关闭更新提醒」"
         )
-        session = load_session(self._cfg.session_path) or {}
         # 通知最近活跃的用户
         jobs = self._store.list_jobs()
         notified: set[str] = set()
+        sent = False
         for job in jobs:
             if job.owner_user_id not in notified:
-                self._client.safe_send_text(job.owner_user_id, msg, job.context_token)
+                if self._client.safe_send_text(job.owner_user_id, msg, job.context_token):
+                    sent = True
                 notified.add(job.owner_user_id)
+        return sent
 
     def _notify_update_result_on_startup(self) -> None:
         result = read_update_result(self._cfg.data_dir)
