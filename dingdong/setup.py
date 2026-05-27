@@ -18,6 +18,9 @@ PROVIDERS = [
     {"key": "openai-com", "name": "OpenAI",             "type": "openai",
      "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
     # --- OpenAI 兼容渠道 ---
+    {"key": "mimo-plan",  "name": "MiMo Token Plan（官方订阅）", "type": "openai",
+     "base_url": "https://token-plan-cn.xiaomimimo.com/v1", "model": "mimo-v2.5-pro",
+     "ask_base_url": True},
     {"key": "deepseek",   "name": "DeepSeek",           "type": "openai",
      "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
     {"key": "openrouter", "name": "OpenRouter",         "type": "openai",
@@ -174,6 +177,16 @@ def _request_restart(data: Path) -> None:
     request_service_restart(data)
 
 
+def _matches_provider_base_url(provider: dict, base_url: str) -> bool:
+    normalized = base_url.rstrip("/")
+    provider_base_url = provider.get("base_url", "").rstrip("/")
+    if provider_base_url and normalized == provider_base_url:
+        return True
+    if provider.get("key") == "mimo-plan":
+        return "token-plan-cn.xiaomimimo.com" in normalized
+    return False
+
+
 def _detect_provider(existing: dict[str, str]) -> dict | None:
     """从已有配置推断当前渠道。"""
     prov = existing.get("LLM_PROVIDER", "")
@@ -184,7 +197,7 @@ def _detect_provider(existing: dict[str, str]) -> dict | None:
     elif prov == "openai":
         base_url = existing.get("OPENAI_BASE_URL", "")
         for p in PROVIDERS:
-            if p["type"] == "openai" and p["base_url"] and p["base_url"] == base_url:
+            if p["type"] == "openai" and _matches_provider_base_url(p, base_url):
                 return p
         if base_url:
             return PROVIDERS[-1]  # custom
@@ -249,6 +262,19 @@ def run_setup(data_dir: str = "./data") -> None:
             if provider["key"] == "custom":
                 env["OPENAI_BASE_URL"] = _ask("Base URL", existing.get("OPENAI_BASE_URL", ""))
                 env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", ""))
+            elif provider.get("ask_base_url"):
+                base_default = (
+                    existing.get("OPENAI_BASE_URL", provider["base_url"])
+                    if current and current["key"] == provider["key"]
+                    else provider["base_url"]
+                )
+                model_default = (
+                    existing.get("OPENAI_MODEL", provider["model"])
+                    if current and current["key"] == provider["key"]
+                    else provider["model"]
+                )
+                env["OPENAI_BASE_URL"] = _ask("Base URL", base_default)
+                env["OPENAI_MODEL"] = _ask("Model", model_default)
             else:
                 env["OPENAI_BASE_URL"] = provider["base_url"]
                 env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", provider["model"]))
@@ -388,6 +414,9 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
         if vp["key"] == "custom":
             env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
             env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
+        elif vp.get("ask_base_url"):
+            env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", vp["base_url"]))
+            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
         else:
             if vp["base_url"]:
                 env["VISION_BASE_URL"] = vp["base_url"]

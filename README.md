@@ -10,6 +10,10 @@ git clone https://github.com/hexsean/dingdong.git && cd dingdong && docker compo
 
 `setup` 会完成模型、搜索、时区、微信登录和微信内更新配置。以后修改配置，只需要再次运行 `setup`，主服务会自动重启。
 
+## 模型渠道
+
+配置向导内置 Anthropic、OpenAI 以及多种 OpenAI 兼容渠道。MiMo Token Plan 订阅用户可在 `setup` 中选择「MiMo Token Plan（官方订阅）」，填入 `tp-` 开头的订阅 API Key，并按需保留或替换专属 Base URL。
+
 ## 微信入口
 
 微信里直接对话：
