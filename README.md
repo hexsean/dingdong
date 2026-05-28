@@ -1,112 +1,159 @@
-# dingdong
+<!-- Logo placeholder: replace with actual logo once designed -->
+<!-- <p align="center"><img src="assets/logo.svg" width="80" alt="dingdong"></p> -->
 
-微信定时任务助手。接入个人微信后，用自然语言创建、修改和触发定时任务。
+<h1 align="center">dingdong</h1>
 
-## 安装
+<p align="center">
+WeChat scheduled-task assistant. Create, modify and trigger timed tasks with natural language.
+</p>
 
-```bash
-git clone https://github.com/hexsean/dingdong.git && cd dingdong && docker compose run --rm dingdong setup && docker compose up -d
-```
+<p align="center">
+<a href="README_zh.md">🇨🇳 中文</a> &nbsp;|&nbsp; 🇺🇸 English
+</p>
 
-`setup` 会完成模型、搜索、时区、微信登录和微信内更新配置。以后修改配置，只需要再次运行 `setup`，主服务会自动重启。
+<p align="center">
+<img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+<img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python">
+<img src="https://img.shields.io/badge/docker-ready-blue" alt="Docker">
+</p>
 
-## 模型渠道
+---
 
-配置向导内置 Anthropic、OpenAI 以及多种 OpenAI 兼容渠道。MiMo Token Plan 订阅用户可在 `setup` 中选择「MiMo Token Plan（官方订阅）」，填入 `tp-` 开头的订阅 API Key，并按需保留或替换专属 Base URL。默认文本模型为 `mimo-v2.5-pro`；如需独立图片理解模型，可选择 MiMo 并使用官方多模态模型 `mimo-v2.5`。
+## Features
 
-## 微信入口
+- Natural language task management via WeChat — "remind me to drink water at 9am every day"
+- Supports cron, interval and one-time schedules
+- Multi-provider LLM: Anthropic, OpenAI, DeepSeek, MiMo, OpenRouter, SiliconFlow, Zhipu, Moonshot, or any OpenAI-compatible endpoint
+- Web search (Exa) and URL reading
+- Image understanding (auto-detect or separate vision model)
+- Token-aware context management — adapts to your model's context window
+- WeChat in-chat update — reply "confirm update" to upgrade without SSH
 
-微信里直接对话：
-
-```
-> 每天 9 点提醒我喝水
-已创建「每日喝水」，明早 9:00 触发。
-
-> 我有哪些任务
-[6dcbc56e] 每日喝水 · cron 0 9 * * * · 提醒我喝水
-
-> 改成每 2 小时 / 暂停 / 删掉 / 现在跑一次
-> 搜一下最近的 AI 新闻
-> 清空对话
-```
-
-常用指令：
-
-| 命令 | 说明 |
-|------|------|
-| `我有哪些任务` | 查看任务列表 |
-| `清空对话` | 重置对话历史 |
-| `检查更新` | 查看版本并准备更新 |
-| `确认更新` | 执行更新 |
-
-## 命令行
-
-配置：
+## Quick Start
 
 ```bash
+git clone https://github.com/hexsean/dingdong.git
+cd dingdong
 docker compose run --rm dingdong setup
-```
-
-查看状态：
-
-```bash
-docker compose run --rm dingdong status
-```
-
-清除登录态：
-
-```bash
-docker compose run --rm dingdong logout
-```
-
-启动或重启服务：
-
-```bash
 docker compose up -d
 ```
 
-查看日志：
+Need public access? Add `--profile tunnel` to enable Cloudflare Tunnel:
+```bash
+docker compose --profile tunnel up -d
+```
+
+`setup` walks you through model, search, timezone, admin password, and public access. Re-run it anytime to change config — the service restarts automatically.
+
+**Upgrading from an older version?** Run `git pull` first to update `docker-compose.yml`, then re-run `setup`.
+
+## Usage
+
+Talk to it in WeChat:
+
+```
+> Remind me to drink water at 9am every day
+Created "daily water reminder", next trigger: tomorrow 09:00.
+
+> What tasks do I have
+[6dcbc56e] daily water reminder · cron 0 9 * * * · remind me to drink water
+
+> Change to every 2 hours / pause / delete / run now
+> Search recent AI news
+> Clear chat
+```
+
+Quick reference:
+
+| Command | Action |
+|---------|--------|
+| `list my tasks` | Show all tasks |
+| `clear chat` | Reset conversation history |
+| `check update` | Check for new version |
+| `confirm update` | Execute the update |
+
+## CLI
+
+| Command | Description |
+|---------|-------------|
+| `docker compose run --rm dingdong setup` | Configure |
+| `docker compose run --rm dingdong status` | View status |
+| `docker compose run --rm dingdong logout` | Clear login session |
+| `docker compose up -d` | Start / restart |
+| `docker compose logs -f dingdong` | View logs |
+
+Local development (without Docker):
 
 ```bash
-docker compose logs -f dingdong
+python main.py setup    # configure
+python main.py start    # run
+python main.py status   # check status
+python main.py logout   # clear session
 ```
 
-本地开发启动：
+## Model Providers
+
+The setup wizard supports these providers out of the box:
+
+| Provider | Type | Default Model |
+|----------|------|---------------|
+| Anthropic | Native | claude-sonnet-4-6 |
+| OpenAI | Native | gpt-4o-mini |
+| MiMo | OpenAI-compatible | mimo-v2.5-pro |
+| DeepSeek | OpenAI-compatible | deepseek-chat |
+| OpenRouter | OpenAI-compatible | openrouter/auto |
+| SiliconFlow | OpenAI-compatible | Qwen/Qwen3-8B |
+| Zhipu GLM | OpenAI-compatible | glm-4-flash |
+| Moonshot | OpenAI-compatible | moonshot-v1-8k |
+| Custom | OpenAI-compatible | (your choice) |
+
+## Admin Panel
+
+After `setup`, the admin panel runs at `http://your-server:8081`. From there you can add assistants, generate QR codes for users, and manage accounts. The admin password is auto-generated during setup.
+
+Multiple users can each scan a QR code to bind their own dingdong assistant. Tasks and conversations are fully isolated; LLM and server resources are shared.
+
+### Public Access
+
+To let users scan QR codes remotely, expose the admin panel to the internet:
+
+**Option A: Cloudflare Tunnel** (quickest, free HTTPS, no domain needed)
 
 ```bash
-python main.py start
+# Install cloudflared, then:
+cloudflared tunnel --url http://localhost:8081
 ```
 
-本地配置：
+Gives you a public `https://*.trycloudflare.com` URL instantly.
 
-```bash
-python main.py setup
+**Option B: Nginx reverse proxy**
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name dingdong.example.com;
+    ssl_certificate     /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+    }
+}
 ```
 
-本地查看状态：
+## Update
 
-```bash
-python main.py status
-```
+Two ways to update:
 
-本地清除登录态：
-
-```bash
-python main.py logout
-```
-
-## 更新
-
-叮咚支持两种更新方式：日常使用推荐微信内更新；需要在服务器上操作时，用命令行更新。
-
-微信内更新会自动推送进度和完成消息：
+**In WeChat** (recommended for daily use):
 
 ```
-检查更新
-确认更新
+check update
+confirm update
 ```
 
-命令行更新适合 SSH 到服务器后执行：
+**Command line** (via SSH):
 
 ```bash
 docker compose pull && docker compose up -d
@@ -114,4 +161,4 @@ docker compose pull && docker compose up -d
 
 ## License
 
-MIT
+[MIT](LICENSE)

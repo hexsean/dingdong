@@ -30,6 +30,8 @@ class Config:
     wechat_update_enabled: bool
     watchtower_url: str
     watchtower_token: str
+    admin_api_port: int
+    admin_password: str
 
     @property
     def db_path(self) -> Path:
@@ -91,4 +93,6 @@ def load_config() -> Config:
         wechat_update_enabled=wechat_update_enabled,
         watchtower_url=os.getenv("WATCHTOWER_URL", "http://watchtower:8080/v1/update"),
         watchtower_token=os.getenv("WATCHTOWER_HTTP_API_TOKEN", ""),
+        admin_api_port=int(os.getenv("ADMIN_API_PORT", "8081")),
+        admin_password=os.getenv("ADMIN_PASSWORD", ""),
     )

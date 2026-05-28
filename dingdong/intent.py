@@ -268,6 +268,8 @@ CANCEL_KEYWORDS = {"取消", "取消更新", "不用", "不更新", "先不更�
 
 class IntentRouter:
     def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *,
+                 account_id: str = "",
+                 is_admin: bool = True,
                  history_limit: int = 200, model_info: "ModelInfo | None" = None,
                  vision_llm: LLMProvider | None = None,
                  context_length: int = 0,
@@ -279,6 +281,8 @@ class IntentRouter:
         self._vision_llm = vision_llm
         self._store = store
         self._scheduler = scheduler
+        self._account_id = account_id
+        self._is_admin = is_admin
         self._history_limit = history_limit
         self._context_length = context_length
         self._on_status = None
@@ -324,35 +328,47 @@ class IntentRouter:
             if owner_user_id in self._pending_clear:
                 self._pending_clear.discard(owner_user_id)
                 if stripped.lower() in CONFIRM_KEYWORDS:
-                    n = self._store.clear_history(owner_user_id)
+                    n = self._store.clear_history(owner_user_id, account_id=self._account_id or None)
                     return f"已清空对话记录（{n} 条）。"
                 return "已取消。"
             if stripped in CLEAR_KEYWORDS:
                 self._pending_clear.add(owner_user_id)
                 return "确认清空所有对话记录？回复「确认」执行。"
             if stripped.lower() in GREETING_KEYWORDS:
-                self._store.append_message(owner_user_id, "user", text)
-                self._store.append_message(owner_user_id, "assistant", GREETING_REPLY)
+                self._store.append_message(owner_user_id, "user", text, account_id=self._account_id)
+                self._store.append_message(owner_user_id, "assistant", GREETING_REPLY, account_id=self._account_id)
                 return GREETING_REPLY
             if stripped == "关闭更新提醒":
+                if not self._is_admin:
+                    return "更新操作仅限管理员账号。"
                 set_disabled(self._store.db_path.parent, True)
                 return "已关闭更新提醒。发「开启更新提醒」可恢复。"
             if stripped == "开启更新提醒":
+                if not self._is_admin:
+                    return "更新操作仅限管理员账号。"
                 set_disabled(self._store.db_path.parent, False)
                 return "已开启更新提醒。"
             if stripped in CHECK_UPDATE_KEYWORDS:
+                if not self._is_admin:
+                    return "更新操作仅限管理员账号。"
                 return self._check_update(owner_user_id)
             if stripped in UPDATE_CONFIRM_KEYWORDS:
+                if not self._is_admin:
+                    return "更新操作仅限管理员账号。"
                 return self._confirm_update(owner_user_id, context_token)
             if stripped in UPDATE_STATUS_KEYWORDS:
+                if not self._is_admin:
+                    return "更新操作仅限管理员账号。"
                 return self._update_status()
             if stripped in UPDATE_KEYWORDS:
+                if not self._is_admin:
+                    return "更新操作仅限管理员账号。"
                 return self._prepare_update(owner_user_id)
 
             shortcut = self._try_shortcut(stripped, owner_user_id)
             if shortcut is not None:
-                self._store.append_message(owner_user_id, "user", text)
-                self._store.append_message(owner_user_id, "assistant", shortcut)
+                self._store.append_message(owner_user_id, "user", text, account_id=self._account_id)
+                self._store.append_message(owner_user_id, "assistant", shortcut, account_id=self._account_id)
                 return shortcut
 
         if has_images and not self._vision_supported:
@@ -364,9 +380,9 @@ class IntentRouter:
         if has_images and self._vision_llm:
             image_desc = self._describe_images(image_bytes_list, text)
             user_text = f"{text}\n\n[图片内容：{image_desc}]" if text else f"[图片内容：{image_desc}]"
-            self._store.append_message(owner_user_id, "user", user_text)
+            self._store.append_message(owner_user_id, "user", user_text, account_id=self._account_id)
         else:
-            self._store.append_message(owner_user_id, "user", text or "[图片]")
+            self._store.append_message(owner_user_id, "user", text or "[图片]", account_id=self._account_id)
 
         messages: list[dict[str, Any]] = list(self._build_context(owner_user_id))
 
@@ -403,7 +419,7 @@ class IntentRouter:
             tool_uses = resp.tool_uses()
             if not tool_uses:
                 reply = resp.text() or "好的。"
-                self._store.append_message(owner_user_id, "assistant", reply)
+                self._store.append_message(owner_user_id, "assistant", reply, account_id=self._account_id)
                 return reply
 
             if self._on_status:
@@ -428,13 +444,13 @@ class IntentRouter:
             if not needs_llm_summary and len(tool_uses) == 1 and tool_uses[0]["name"] in QUICK_REPLY_TOOLS:
                 quick = _quick_reply(tool_uses[0]["name"], tool_results[0]["content"])
                 if quick:
-                    self._store.append_message(owner_user_id, "assistant", quick)
+                    self._store.append_message(owner_user_id, "assistant", quick, account_id=self._account_id)
                     return quick
 
             messages.append({"role": "user", "content": tool_results})
 
         fallback = "（已达到工具调用上限，请把指令拆开说）"
-        self._store.append_message(owner_user_id, "assistant", fallback)
+        self._store.append_message(owner_user_id, "assistant", fallback, account_id=self._account_id)
         return fallback
 
     def _tz(self) -> ZoneInfo:
@@ -443,9 +459,11 @@ class IntentRouter:
     def _build_context(self, owner_user_id: str) -> list[dict[str, str]]:
         """Build conversation history within token budget."""
         if not self._context_length:
-            return self._store.get_history(owner_user_id, limit=FALLBACK_HISTORY_LIMIT)
+            return self._store.get_history(owner_user_id, limit=FALLBACK_HISTORY_LIMIT,
+                                           account_id=self._account_id or None)
 
-        history = self._store.get_history(owner_user_id, limit=self._history_limit)
+        history = self._store.get_history(owner_user_id, limit=self._history_limit,
+                                          account_id=self._account_id or None)
         if not history:
             return history
 
@@ -647,7 +665,7 @@ class IntentRouter:
             return _err(str(exc))
 
     def _tool_list_jobs(self, owner_user_id: str) -> str:
-        jobs = self._store.list_jobs(owner_user_id=owner_user_id)
+        jobs = self._store.list_jobs(owner_user_id=owner_user_id, account_id=self._account_id or None)
         if not jobs:
             return _ok({"jobs": []}, note="还没有任务。试试：「每天 9 点提醒我喝水」。")
         briefs = []
@@ -666,7 +684,8 @@ class IntentRouter:
         job = Job(
             id=new_job_id(), name=str(args["name"]).strip(), goal=str(args["goal"]).strip(),
             schedule_kind=kind, schedule_value=schedule_value,
-            owner_user_id=owner_user_id, context_token=context_token, enabled=True,
+            owner_user_id=owner_user_id, context_token=context_token,
+            account_id=self._account_id, enabled=True,
         )
         try:
             build_trigger(kind, schedule_value, self._scheduler.tz)
@@ -724,7 +743,7 @@ class IntentRouter:
         ids = args.get("job_ids") or []
         single = args.get("job_id", "")
         if (single == "all" or not ids) and args.get("confirm") != "yes":
-            jobs = self._store.list_jobs(owner_user_id=owner_user_id)
+            jobs = self._store.list_jobs(owner_user_id=owner_user_id, account_id=self._account_id or None)
             if not jobs:
                 return _ok({"deleted_count": 0}, note="没有任务可删")
             self._pending_delete_all.add(owner_user_id)
@@ -733,7 +752,7 @@ class IntentRouter:
             ids = [single] if single != "all" else []
 
         if single == "all" or not ids:
-            jobs = self._store.list_jobs(owner_user_id=owner_user_id)
+            jobs = self._store.list_jobs(owner_user_id=owner_user_id, account_id=self._account_id or None)
             if not jobs:
                 return _ok({"deleted_count": 0}, note="没有任务可删")
             ids = [j.id for j in jobs]
@@ -786,10 +805,15 @@ class IntentRouter:
         raw_id = (raw_id or "").strip()
         if not raw_id:
             return None
-        job = self._store.get(raw_id) or self._store.get_by_prefix(raw_id)
+        aid = self._account_id or None
+        job = self._store.get(raw_id)
         if job is None:
-            job = self._store.find_by_name(raw_id, owner_user_id=owner_user_id)
+            job = self._store.get_by_prefix(raw_id, account_id=aid)
+        if job is None:
+            job = self._store.find_by_name(raw_id, owner_user_id=owner_user_id, account_id=aid)
         if job is None or job.owner_user_id != owner_user_id:
+            return None
+        if self._account_id and job.account_id != self._account_id:
             return None
         return job
 

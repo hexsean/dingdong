@@ -302,9 +302,9 @@ def run_setup(data_dir: str = "./data") -> None:
 
     env: dict[str, str] = dict(existing)
 
-    # ── [1/5] 模型配置 ──
+    # ── [1/6] 模型配置 ──
 
-    _section("[1/5] 模型配置")
+    _section("[1/6] 模型配置")
 
     default_idx = _detect_provider_index(existing) if is_update else 0
     options = []
@@ -332,21 +332,21 @@ def run_setup(data_dir: str = "./data") -> None:
     # context length
     _setup_context_length(env, existing, model, data_dir=data)
 
-    # ── [2/5] 视觉模型 ──
+    # ── [2/6] 视觉模型 ──
 
-    _section("[2/5] 视觉模型")
+    _section("[2/6] 视觉模型")
     _setup_vision(env, existing, provider, model)
 
-    # ── [3/5] Exa 搜索 ──
+    # ── [3/6] Exa 搜索 ──
 
-    _section("[3/5] Exa 搜索（可选）")
+    _section("[3/6] Exa 搜索（可选）")
     exa_key = _ask_secret("Exa API Key", existing.get("EXA_API_KEY", ""))
     if exa_key:
         env["EXA_API_KEY"] = exa_key
 
-    # ── [4/5] 时区 ──
+    # ── [4/6] 时区 ──
 
-    _section("[4/5] 时区")
+    _section("[4/6] 时区")
     cur_tz = existing.get("SCHEDULER_TZ", "")
     if cur_tz:
         print(f"  当前：{cur_tz}")
@@ -358,9 +358,14 @@ def run_setup(data_dir: str = "./data") -> None:
     else:
         _setup_timezone(env)
 
-    # ── [5/5] 微信内更新 ──
+    # ── [5/6] 管理台密码 ──
 
-    _section("[5/5] 微信内更新")
+    _section("[5/6] 管理台")
+    _setup_admin_password(env, existing)
+
+    # ── [6/6] 微信内更新 ──
+
+    _section("[6/6] 微信内更新")
     _setup_wechat_update(env, existing)
 
     # ── 保存 & 登录 ──
@@ -624,6 +629,48 @@ def _setup_wechat_update(env: dict, existing: dict) -> None:
     if existing.get("WATCHTOWER_URL"):
         env["WATCHTOWER_URL"] = existing["WATCHTOWER_URL"]
     print("  已开启微信内更新。")
+
+
+def _setup_admin_password(env: dict, existing: dict) -> None:
+    cur = existing.get("ADMIN_PASSWORD", "")
+    print("  管理台用于添加/管理叮咚助手账号。")
+    print("  管理密码用于保护管理台访问。\n")
+
+    if cur:
+        print(f"  当前密码：{_mask(cur)}")
+        regen = _ask("重新生成密码？(y/N)", "N")
+        if regen.lower() not in ("y", "yes"):
+            env["ADMIN_PASSWORD"] = cur
+            print("  保留现有密码。")
+            return
+
+    password = secrets.token_urlsafe(16)
+    env["ADMIN_PASSWORD"] = password
+    port = existing.get("ADMIN_API_PORT", "8081")
+    print(f"\n  ┌─────────────────────────────────────┐")
+    print(f"  │  管理台密码（请妥善保存）：             │")
+    print(f"  │  {password:<36s}│")
+    print(f"  └─────────────────────────────────────┘")
+
+    print(f"\n  管理台地址：http://你的服务器:{port}")
+    print()
+
+    options = ["Cloudflare Tunnel（免费，无需域名）", "自行配置 Nginx / 其他", "仅本地访问"]
+    choice = _select("公网访问方式", options, default=2)
+    if choice == 0:
+        print()
+        print("  ┌─────────────────────────────────────────────────────┐")
+        print("  │  启动时加 --profile tunnel 即可自动穿透：            │")
+        print("  │                                                     │")
+        print("  │  docker compose --profile tunnel up -d              │")
+        print("  │                                                     │")
+        print("  │  查看公网地址：                                      │")
+        print("  │  docker compose logs cloudflared                    │")
+        print("  │                                                     │")
+        print("  │  日志中 https://*.trycloudflare.com 即为公网地址     │")
+        print("  └─────────────────────────────────────────────────────┘")
+    elif choice == 1:
+        print(f"\n  管理台监听 0.0.0.0:{port}，请自行配置反向代理。")
 
 
 def _print_update_hint(env: dict) -> None:

@@ -1,12 +1,7 @@
-"""SQLite 持久化层：jobs 表的 CRUD。
+"""SQLite 持久化层：accounts / jobs / chat_history。
 
-Job 表示一个定时目标：
-- ``schedule_kind`` 取值 ``"cron"`` / ``"interval"`` / ``"date"``。
-- ``schedule_value`` 是该 kind 对应的 JSON 字符串：
-  - cron     -> {"expression": "0 9 * * *"}
-  - interval -> {"seconds": 3600}
-  - date     -> {"run_at": "2026-05-25 09:00:00"}
-- ``owner_user_id`` 与 ``context_token`` 用于把执行结果回投到原会话。
+Account 表示一个绑定的微信账号（多租户模式下每人一个）。
+Job 表示一个定时目标，隶属于某个 account + owner_user_id。
 """
 
 from __future__ import annotations
@@ -24,8 +19,17 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS accounts (
+    id         TEXT PRIMARY KEY,
+    label      TEXT NOT NULL DEFAULT '',
+    is_admin   INTEGER NOT NULL DEFAULT 0,
+    status     TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              TEXT PRIMARY KEY,
+    account_id      TEXT NOT NULL DEFAULT '',
     name            TEXT NOT NULL,
     goal            TEXT NOT NULL,
     schedule_kind   TEXT NOT NULL,
@@ -38,18 +42,51 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_result     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_account ON jobs(account_id);
 
 CREATE TABLE IF NOT EXISTS chat_history (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id    TEXT NOT NULL DEFAULT '',
     owner_user_id TEXT NOT NULL,
     role          TEXT NOT NULL,
     content       TEXT NOT NULL,
     created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_history(owner_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_account ON chat_history(account_id, owner_user_id, created_at);
 """
 
 VALID_SCHEDULE_KINDS = {"cron", "interval", "date"}
+
+
+# ── Account ─────────────────────────────────────────────────
+
+
+@dataclass
+class Account:
+    id: str
+    label: str = ""
+    is_admin: bool = False
+    status: str = "active"
+    created_at: int = field(default_factory=lambda: int(time.time()))
+
+    def to_row(self) -> tuple[Any, ...]:
+        return (self.id, self.label, 1 if self.is_admin else 0, self.status, self.created_at)
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Account:
+        return cls(
+            id=row["id"], label=row["label"],
+            is_admin=bool(row["is_admin"]), status=row["status"],
+            created_at=row["created_at"],
+        )
+
+
+def new_account_id() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+# ── Job ─────────────────────────────────────────────────────
 
 
 @dataclass
@@ -61,6 +98,7 @@ class Job:
     schedule_value: dict[str, Any]
     owner_user_id: str
     context_token: str
+    account_id: str = ""
     enabled: bool = True
     created_at: int = field(default_factory=lambda: int(time.time()))
     last_run_at: int | None = None
@@ -69,6 +107,7 @@ class Job:
     def to_row(self) -> tuple[Any, ...]:
         return (
             self.id,
+            self.account_id,
             self.name,
             self.goal,
             self.schedule_kind,
@@ -82,9 +121,10 @@ class Job:
         )
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "Job":
+    def from_row(cls, row: sqlite3.Row) -> Job:
         return cls(
             id=row["id"],
+            account_id=row["account_id"] if "account_id" in row.keys() else "",
             name=row["name"],
             goal=row["goal"],
             schedule_kind=row["schedule_kind"],
@@ -117,6 +157,9 @@ def new_job_id() -> str:
     return uuid.uuid4().hex
 
 
+# ── Store ───────────────────────────────────────────────────
+
+
 class JobStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -125,22 +168,104 @@ class JobStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._migrate()
         self._conn.executescript(SCHEMA)
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        cols_ch = {r[1] for r in self._conn.execute("PRAGMA table_info(chat_history)").fetchall()}
+        needs_jobs = cols and "account_id" not in cols
+        needs_chat = cols_ch and "account_id" not in cols_ch
+        if not needs_jobs and not needs_chat:
+            return
+        log.info("migrating: adding account_id columns")
+        self._conn.execute("BEGIN")
+        try:
+            if needs_jobs:
+                self._conn.execute("ALTER TABLE jobs ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_account ON jobs(account_id)")
+            if needs_chat:
+                self._conn.execute("ALTER TABLE chat_history ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_account ON chat_history(account_id, owner_user_id, created_at)"
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
 
-    # ---------- CRUD ----------
+    # ── accounts ──
+
+    def insert_account(self, account: Account) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO accounts (id, label, is_admin, status, created_at) VALUES (?,?,?,?,?)",
+                account.to_row(),
+            )
+
+    def get_account(self, account_id: str) -> Account | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        return Account.from_row(row) if row else None
+
+    def list_accounts(self, status: str | None = None) -> list[Account]:
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT * FROM accounts WHERE status = ? ORDER BY created_at", (status,)
+                ).fetchall()
+            else:
+                rows = self._conn.execute("SELECT * FROM accounts ORDER BY created_at").fetchall()
+        return [Account.from_row(r) for r in rows]
+
+    def update_account(self, account_id: str, **fields: Any) -> Account | None:
+        if not fields:
+            return self.get_account(account_id)
+        allowed = {"label", "is_admin", "status"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"cannot update account fields: {bad}")
+        if "is_admin" in fields:
+            fields["is_admin"] = 1 if fields["is_admin"] else 0
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self._lock:
+            self._conn.execute(f"UPDATE accounts SET {sets} WHERE id = ?", (*fields.values(), account_id))
+        return self.get_account(account_id)
+
+    def delete_account(self, account_id: str) -> bool:
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                cur = self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+                self._conn.execute("DELETE FROM jobs WHERE account_id = ?", (account_id,))
+                self._conn.execute("DELETE FROM chat_history WHERE account_id = ?", (account_id,))
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return cur.rowcount > 0
+
+    def get_admin_account(self) -> Account | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM accounts WHERE is_admin = 1 LIMIT 1"
+            ).fetchone()
+        return Account.from_row(row) if row else None
+
+    # ── jobs ──
 
     def insert(self, job: Job) -> None:
         if job.schedule_kind not in VALID_SCHEDULE_KINDS:
             raise ValueError(f"invalid schedule_kind: {job.schedule_kind}")
         with self._lock:
             self._conn.execute(
-                "INSERT INTO jobs (id,name,goal,schedule_kind,schedule_value,owner_user_id,"
-                "context_token,enabled,created_at,last_run_at,last_result) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO jobs (id,account_id,name,goal,schedule_kind,schedule_value,"
+                "owner_user_id,context_token,enabled,created_at,last_run_at,last_result) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 job.to_row(),
             )
 
@@ -149,19 +274,30 @@ class JobStore:
             row = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return Job.from_row(row) if row else None
 
-    def get_by_prefix(self, prefix: str) -> Job | None:
-        """支持按 id 前缀匹配（必须唯一）。"""
+    def get_by_prefix(self, prefix: str, account_id: str | None = None) -> Job | None:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM jobs WHERE id LIKE ? LIMIT 2", (f"{prefix}%",)
-            ).fetchall()
+            if account_id is not None:
+                rows = self._conn.execute(
+                    "SELECT * FROM jobs WHERE id LIKE ? AND account_id = ? LIMIT 2",
+                    (f"{prefix}%", account_id),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM jobs WHERE id LIKE ? LIMIT 2", (f"{prefix}%",)
+                ).fetchall()
         if len(rows) == 1:
             return Job.from_row(rows[0])
         return None
 
-    def find_by_name(self, name: str, owner_user_id: str | None = None) -> Job | None:
+    def find_by_name(self, name: str, owner_user_id: str | None = None,
+                     account_id: str | None = None) -> Job | None:
         with self._lock:
-            if owner_user_id:
+            if owner_user_id and account_id is not None:
+                row = self._conn.execute(
+                    "SELECT * FROM jobs WHERE name = ? AND owner_user_id = ? AND account_id = ?",
+                    (name, owner_user_id, account_id),
+                ).fetchone()
+            elif owner_user_id:
                 row = self._conn.execute(
                     "SELECT * FROM jobs WHERE name = ? AND owner_user_id = ?",
                     (name, owner_user_id),
@@ -172,12 +308,23 @@ class JobStore:
                 ).fetchone()
         return Job.from_row(row) if row else None
 
-    def list_jobs(self, owner_user_id: str | None = None) -> list[Job]:
+    def list_jobs(self, owner_user_id: str | None = None,
+                  account_id: str | None = None) -> list[Job]:
         with self._lock:
-            if owner_user_id:
+            if owner_user_id and account_id is not None:
+                rows = self._conn.execute(
+                    "SELECT * FROM jobs WHERE owner_user_id = ? AND account_id = ? ORDER BY created_at",
+                    (owner_user_id, account_id),
+                ).fetchall()
+            elif owner_user_id:
                 rows = self._conn.execute(
                     "SELECT * FROM jobs WHERE owner_user_id = ? ORDER BY created_at",
                     (owner_user_id,),
+                ).fetchall()
+            elif account_id is not None:
+                rows = self._conn.execute(
+                    "SELECT * FROM jobs WHERE account_id = ? ORDER BY created_at",
+                    (account_id,),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
@@ -226,27 +373,54 @@ class JobStore:
                 (context_token, job_id),
             )
 
-    # ---------- chat history ----------
+    def migrate_account_id(self, account_id: str) -> int:
+        """Assign account_id to all rows that have empty account_id (single-tenant migration)."""
+        with self._lock:
+            c1 = self._conn.execute(
+                "UPDATE jobs SET account_id = ? WHERE account_id = ''", (account_id,)
+            )
+            c2 = self._conn.execute(
+                "UPDATE chat_history SET account_id = ? WHERE account_id = ''", (account_id,)
+            )
+        return c1.rowcount + c2.rowcount
 
-    def append_message(self, owner_user_id: str, role: str, content: str) -> None:
+    # ── chat history ──
+
+    def append_message(self, owner_user_id: str, role: str, content: str,
+                       account_id: str = "") -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT INTO chat_history (owner_user_id, role, content, created_at) VALUES (?,?,?,?)",
-                (owner_user_id, role, content, int(time.time())),
+                "INSERT INTO chat_history (account_id, owner_user_id, role, content, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (account_id, owner_user_id, role, content, int(time.time())),
             )
 
-    def get_history(self, owner_user_id: str, limit: int = 20) -> list[dict[str, str]]:
+    def get_history(self, owner_user_id: str, limit: int = 20,
+                    account_id: str | None = None) -> list[dict[str, str]]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT role, content FROM chat_history "
-                "WHERE owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
-                (owner_user_id, limit),
-            ).fetchall()
+            if account_id is not None:
+                rows = self._conn.execute(
+                    "SELECT role, content FROM chat_history "
+                    "WHERE account_id = ? AND owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (account_id, owner_user_id, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT role, content FROM chat_history "
+                    "WHERE owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (owner_user_id, limit),
+                ).fetchall()
         return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
-    def clear_history(self, owner_user_id: str) -> int:
+    def clear_history(self, owner_user_id: str, account_id: str | None = None) -> int:
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM chat_history WHERE owner_user_id = ?", (owner_user_id,)
-            )
+            if account_id is not None:
+                cur = self._conn.execute(
+                    "DELETE FROM chat_history WHERE account_id = ? AND owner_user_id = ?",
+                    (account_id, owner_user_id),
+                )
+            else:
+                cur = self._conn.execute(
+                    "DELETE FROM chat_history WHERE owner_user_id = ?", (owner_user_id,)
+                )
         return cur.rowcount

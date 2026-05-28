@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>叮咚管理台</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{colors:{wx:'#07C160',primary:'#3B82F6'}}}}</script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- Login -->
+<div id="v-login" class="hidden min-h-screen flex items-center justify-center">
+  <div class="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="text-4xl mb-2">🔔</div>
+      <h1 class="text-xl font-bold text-gray-800">叮咚管理台</h1>
+    </div>
+    <div>
+      <input id="login-pw" type="password" placeholder="管理密码"
+        class="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition mb-4">
+      <div id="login-err" class="text-red-500 text-sm mb-3 hidden"></div>
+      <button onclick="doLogin()"
+        class="w-full py-3 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition">
+        登 录
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Dashboard -->
+<div id="v-dash" class="hidden">
+  <div class="max-w-4xl mx-auto px-4 py-8">
+    <div class="flex items-center justify-between mb-8">
+      <div class="flex items-center gap-3">
+        <span class="text-3xl">🔔</span>
+        <div>
+          <h1 class="text-xl font-bold text-gray-800">叮咚管理台</h1>
+          <span id="dash-ver" class="text-xs text-gray-400"></span>
+        </div>
+      </div>
+      <button onclick="showAdd()"
+        class="px-5 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        添加助手
+      </button>
+    </div>
+
+    <div id="dash-empty" class="hidden text-center py-16">
+      <div class="text-5xl mb-4">📭</div>
+      <p class="text-gray-400 mb-4">还没有叮咚助手</p>
+      <button onclick="showAdd()" class="text-primary hover:underline">添加第一个</button>
+    </div>
+
+    <div id="dash-list" class="grid gap-4 sm:grid-cols-2"></div>
+  </div>
+</div>
+
+<!-- Add Modal -->
+<div id="v-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+    <!-- Step 1: Label -->
+    <div id="add-s1">
+      <h2 class="text-lg font-bold mb-4">添加叮咚助手</h2>
+      <input id="add-label" type="text" placeholder="给助手起个名字（如：小明的叮咚）"
+        class="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition mb-4">
+      <div class="flex gap-3">
+        <button onclick="hideModal()" class="flex-1 py-2.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition">取消</button>
+        <button onclick="doCreate()" id="add-btn" class="flex-1 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition">下一步</button>
+      </div>
+    </div>
+    <!-- Step 2: QR -->
+    <div id="add-s2" class="hidden text-center">
+      <h2 class="text-lg font-bold mb-2">扫码绑定</h2>
+      <p class="text-sm text-gray-500 mb-4">请用微信扫一扫（首页右上角 +）</p>
+      <div id="qr-area" class="flex justify-center mb-4">
+        <img id="qr-img" class="w-56 h-56 rounded-lg border" src="" alt="QR">
+      </div>
+      <div id="qr-status" class="text-sm text-gray-400 mb-4">等待扫码...</div>
+      <button onclick="cancelAdd()" class="px-6 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition">取消</button>
+    </div>
+    <!-- Step 3: Done -->
+    <div id="add-s3" class="hidden text-center py-4">
+      <div class="text-5xl mb-3">✅</div>
+      <h2 class="text-lg font-bold mb-2">绑定成功</h2>
+      <p class="text-sm text-gray-500 mb-4">助手已上线，现在可以在微信中使用了</p>
+      <button onclick="hideModal();loadAccounts()" class="px-6 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition">完成</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let token = localStorage.getItem('dd_token') || '';
+let currentAddId = null;
+let pollTimer = null;
+
+function api(method, path, body) {
+  const h = {'Content-Type':'application/json'};
+  if (token) h['Authorization'] = 'Bearer ' + token;
+  return fetch(API + path, {method, headers: h, body: body ? JSON.stringify(body) : undefined})
+    .then(r => r.json().then(d => ({status: r.status, data: d})));
+}
+
+async function init() {
+  const r = await api('GET', '/api/auth-status');
+  if (r.data.requires_auth) {
+    if (!token) { show('v-login'); return; }
+    const t = await api('GET', '/api/accounts');
+    if (t.status === 401) { token=''; localStorage.removeItem('dd_token'); show('v-login'); return; }
+  }
+  show('v-dash');
+  loadAccounts();
+  loadStatus();
+}
+
+async function doLogin() {
+  const pw = document.getElementById('login-pw').value;
+  const r = await api('POST', '/api/login', {password: pw});
+  if (r.data.token) {
+    token = r.data.token;
+    localStorage.setItem('dd_token', token);
+    show('v-dash');
+    loadAccounts();
+    loadStatus();
+  } else {
+    const el = document.getElementById('login-err');
+    el.textContent = r.data.error || '登录失败';
+    el.classList.remove('hidden');
+  }
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !document.getElementById('v-login').classList.contains('hidden')) doLogin();
+});
+
+async function loadStatus() {
+  const r = await api('GET', '/api/status');
+  if (r.status === 200) document.getElementById('dash-ver').textContent = 'v' + r.data.version;
+}
+
+async function loadAccounts() {
+  const r = await api('GET', '/api/accounts');
+  if (r.status !== 200) return;
+  const list = r.data.accounts || [];
+  const el = document.getElementById('dash-list');
+  const empty = document.getElementById('dash-empty');
+  if (!list.length) { empty.classList.remove('hidden'); el.innerHTML=''; return; }
+  empty.classList.add('hidden');
+  el.innerHTML = list.map(a => accountCard(a)).join('');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function accountCard(a) {
+  const dot = a.online ? 'bg-wx' : 'bg-gray-300';
+  const statusText = a.online ? '在线' : (a.status === 'pending_login' ? '待扫码' : '离线');
+  const label = esc(a.label || '未命名');
+  const admin = a.is_admin ? '<span class="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">管理员</span>' : '';
+  return `
+  <div class="bg-white rounded-xl border border-gray-100 p-5 shadow-sm hover:shadow-md transition">
+    <div class="flex items-start justify-between mb-3">
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-2.5 h-2.5 rounded-full ${dot}"></span>
+          <span class="font-medium text-gray-800">${label}</span>
+          ${admin}
+        </div>
+        <div class="text-xs text-gray-400">${esc(a.id)} · ${statusText}</div>
+      </div>
+    </div>
+    <div class="flex gap-2 mt-3">
+      ${a.status === 'pending_login' ? `<button onclick="startLogin('${esc(a.id)}')" class="text-xs px-3 py-1.5 bg-wx text-white rounded-lg hover:bg-green-600 transition">扫码绑定</button>` : `<button onclick="relogin('${esc(a.id)}')" class="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition">重新登录</button>`}
+      ${!a.is_admin ? `<button onclick="removeAccount('${esc(a.id)}','${label}')" class="text-xs px-3 py-1.5 border border-red-200 rounded-lg text-red-500 hover:bg-red-50 transition">删除</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function show(id) {
+  ['v-login','v-dash','v-modal'].forEach(v => document.getElementById(v).classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+}
+
+function showAdd() {
+  document.getElementById('add-s1').classList.remove('hidden');
+  document.getElementById('add-s2').classList.add('hidden');
+  document.getElementById('add-s3').classList.add('hidden');
+  document.getElementById('add-label').value = '';
+  document.getElementById('v-modal').classList.remove('hidden');
+}
+
+function hideModal() {
+  document.getElementById('v-modal').classList.add('hidden');
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  currentAddId = null;
+}
+
+async function doCreate() {
+  const label = document.getElementById('add-label').value.trim();
+  const r = await api('POST', '/api/accounts', {label});
+  if (r.status >= 300) { alert(r.data.error || '创建失败'); return; }
+  currentAddId = r.data.id;
+  await startLogin(r.data.id);
+}
+
+async function startLogin(accountId) {
+  currentAddId = accountId;
+  document.getElementById('add-s1').classList.add('hidden');
+  document.getElementById('add-s2').classList.remove('hidden');
+  document.getElementById('add-s3').classList.add('hidden');
+  document.getElementById('v-modal').classList.remove('hidden');
+  document.getElementById('qr-status').textContent = '生成二维码...';
+
+  const r = await api('POST', '/api/accounts/' + accountId + '/login');
+  if (r.data.status === 'already_logged_in') {
+    document.getElementById('add-s2').classList.add('hidden');
+    document.getElementById('add-s3').classList.remove('hidden');
+    return;
+  }
+  if (r.data.qr_url) {
+    document.getElementById('qr-img').src = '/api/accounts/' + accountId + '/qrcode.png?' + Date.now();
+    document.getElementById('qr-status').textContent = '等待扫码...';
+    pollTimer = setInterval(() => pollQr(accountId), 2000);
+  } else {
+    document.getElementById('qr-status').textContent = r.data.error || '生成失败';
+  }
+}
+
+async function pollQr(accountId) {
+  const r = await api('GET', '/api/accounts/' + accountId + '/login');
+  const s = r.data.status;
+  if (s === 'confirmed') {
+    clearInterval(pollTimer); pollTimer = null;
+    document.getElementById('add-s2').classList.add('hidden');
+    document.getElementById('add-s3').classList.remove('hidden');
+  } else if (s === 'expired') {
+    clearInterval(pollTimer); pollTimer = null;
+    document.getElementById('qr-status').textContent = '二维码已过期，请重试';
+  } else if (s === 'scanned') {
+    document.getElementById('qr-status').textContent = '已扫码，请在手机上确认...';
+  }
+}
+
+async function relogin(accountId) {
+  if (!confirm('重新登录将需要重新扫码，确定？')) return;
+  await startLogin(accountId);
+}
+
+function cancelAdd() {
+  if (currentAddId) {
+    // Keep the account in pending state; don't delete
+  }
+  hideModal();
+  loadAccounts();
+}
+
+async function removeAccount(id, name) {
+  if (!confirm(`确定删除「${name}」？其所有任务和对话记录将被清除。`)) return;
+  await api('DELETE', '/api/accounts/' + id);
+  loadAccounts();
+}
+
+init();
+</script>
+</body>
+</html>

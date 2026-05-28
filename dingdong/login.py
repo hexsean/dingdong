@@ -152,3 +152,56 @@ def ensure_login(
         time.sleep(POLL_INTERVAL_SECONDS)
 
     raise ILinkError("qrcode login timed out after 5 minutes")
+
+
+def start_qr_login(
+    session_path: Path,
+    qrcode_png_path: Path,
+    client_factory,
+) -> tuple[ILinkClient, str, str] | None:
+    """Non-blocking: return (client, qr_url, poll_token) or None if cached session exists."""
+    cached = load_session(session_path)
+    if cached and cached.get("bot_token"):
+        return None
+
+    client = client_factory(None)
+    resp = client.get_qrcode()
+    qr_url = _extract_qr_content(resp)
+    poll_token = _extract_poll_token(resp)
+    _save_qr_png(qr_url, qrcode_png_path)
+    return client, qr_url, poll_token
+
+
+def poll_login_status(
+    client: ILinkClient,
+    poll_token: str,
+    session_path: Path,
+    client_factory,
+) -> dict[str, Any]:
+    """Single poll attempt. Returns {status, bot_token?, client?}."""
+    try:
+        status = client.poll_qrcode_status(poll_token)
+    except ILinkError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    s = (status.get("status") or status.get("state") or "").lower()
+
+    if s in {"confirmed", "ok", "success"} and status.get("bot_token"):
+        bot_token = status["bot_token"]
+        save_session(
+            session_path,
+            {
+                "bot_token": bot_token,
+                "baseurl": status.get("baseurl"),
+                "bot_id": status.get("bot_id"),
+                "ilink_bot_id": status.get("ilink_bot_id"),
+                "login_at": int(time.time()),
+            },
+        )
+        return {"status": "confirmed", "bot_token": bot_token,
+                "client": client_factory(bot_token)}
+
+    if s in {"expired", "cancel", "cancelled", "canceled"}:
+        return {"status": "expired"}
+
+    return {"status": s or "waiting"}
