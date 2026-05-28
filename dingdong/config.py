@@ -57,7 +57,7 @@ def load_config() -> Config:
     raw_allowed = os.getenv("ALLOWED_USER_IDS", "").strip()
     allowed = frozenset(x.strip() for x in raw_allowed.split(",") if x.strip())
 
-    wechat_update_enabled = os.getenv("WECHAT_UPDATE_ENABLED", "").strip().lower() in (
+    wechat_update_enabled = os.getenv("WECHAT_UPDATE_ENABLED", "true").strip().lower() in (
         "1", "true", "yes", "y", "on",
     )
 

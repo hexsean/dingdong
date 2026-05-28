@@ -26,7 +26,7 @@ from .models import fetch_model_info
 from .restart import RESTART_CHECK_INTERVAL_SECONDS, restart_marker_signature
 from .scheduler import Scheduler
 from .search import init_exa
-from .self_update import read_update_result, write_update_result
+from .self_update import read_update_result, update_configured, write_update_result
 from .storage import JobStore
 from .updater import CHECK_ID, is_disabled, is_newer_version, local_version, remote_version
 
@@ -258,9 +258,12 @@ class Bot:
                 self._last_update_notice_version = rv
 
     def _notify_update(self, current: str, latest: str) -> bool:
+        update_action = "回复「确认更新」执行，期间会短暂重启。"
+        if not update_configured(self._cfg.wechat_update_enabled, self._cfg.watchtower_token):
+            update_action = "微信内更新未开启，请在服务器手动更新。"
         msg = (
             f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
-            "更新：发「检查更新」，再回复「确认更新」\n"
+            f"{update_action}\n"
             "关闭提醒：发「关闭更新提醒」"
         )
         # 通知最近活跃的用户

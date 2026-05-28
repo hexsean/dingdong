@@ -465,15 +465,15 @@ def _setup_timezone(env: dict[str, str]) -> None:
 
 
 def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
-    current_enabled = _is_enabled(existing.get("WECHAT_UPDATE_ENABLED", ""))
+    current_enabled = _is_enabled(existing.get("WECHAT_UPDATE_ENABLED", "true"))
     if current_enabled:
         print("    当前：已开启")
     else:
         print("    当前：未开启")
-    print("    开启后可在微信里发「检查更新」，再回复「确认更新」。")
+    print("    开启后有更新提醒时可直接回复「确认更新」；也可发「检查更新」手动检查。")
     print()
 
-    default = "Y" if current_enabled or not existing else "N"
+    default = "Y" if current_enabled else "N"
     enable = _ask("开启微信内更新？(y/N)" if default == "N" else "开启微信内更新？(Y/n)", default)
     token = existing.get("WATCHTOWER_HTTP_API_TOKEN", "").strip()
     if not token:
@@ -497,4 +497,4 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
 def _print_update_hint(env: dict[str, str]) -> None:
     if not _is_enabled(env.get("WECHAT_UPDATE_ENABLED", "")):
         return
-    print("  微信内更新已开启。之后微信里发「检查更新」，再回复「确认更新」。")
+    print("  微信内更新已开启。有更新提醒时回复「确认更新」；也可发「检查更新」手动检查。")
