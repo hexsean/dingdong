@@ -20,6 +20,10 @@ if [[ ! "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+git fetch --quiet --tags origin
+PREV_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | awk -v current="v${VER}" '$0 != current { print; exit }')
+PREV_TAG=${PREV_TAG:-none}
+
 if git rev-parse -q --verify "refs/tags/v${VER}" >/dev/null; then
   echo "tag v${VER} 已存在，请先更新 VERSION"
   exit 1
@@ -30,7 +34,7 @@ if git ls-remote --exit-code --tags origin "refs/tags/v${VER}" >/dev/null 2>&1; 
   exit 1
 fi
 
-echo "=== 版本: v${VER} ==="
+echo "=== 版本: ${PREV_TAG} -> v${VER} ==="
 echo "=== 变更文件 ==="
 git status -s
 echo ""
@@ -146,4 +150,4 @@ if docker pull "hexsean/dingdong:${VER}" >/dev/null; then
   docker tag "hexsean/dingdong:${VER}" hexsean/dingdong:latest
 fi
 
-echo "✓ v${VER} done"
+echo "✓ ${PREV_TAG} -> v${VER} done"
