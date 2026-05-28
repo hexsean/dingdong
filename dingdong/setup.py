@@ -652,18 +652,8 @@ def _setup_admin_password(env: dict, existing: dict) -> None:
     print(f"  │  {password:<36s}│")
     print(f"  └─────────────────────────────────────┘")
 
-    print()
-    options = ["Cloudflare Tunnel（免费自动穿透，无需域名）", "自行配置（Nginx 等）", "仅本地访问"]
-    cur_tunnel = _is_enabled(existing.get("CF_TUNNEL", ""))
-    default = 0 if cur_tunnel else 2
-    choice = _select("公网访问方式", options, default=default)
-    if choice == 0:
-        env["CF_TUNNEL"] = "true"
-        print("  已开启。启动后公网地址将显示在管理台页面和日志中。")
-    else:
-        env.pop("CF_TUNNEL", None)
-        if choice == 1:
-            print(f"  管理台监听 0.0.0.0:{port}，请自行配置反向代理。")
+    print(f"\n  管理台地址：http://你的服务器:{port}")
+    print("  如需公网访问，请自行配置 Nginx 反向代理。")
 
 
 def _print_update_hint(env: dict) -> None:

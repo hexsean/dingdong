@@ -28,7 +28,7 @@
 - 图片理解（自动检测或独立视觉模型）
 - 基于 token 的上下文管理——自动适配模型上下文窗口
 - 多账号——一台服务器，多人使用，完全隔离
-- 管理台 + Cloudflare Tunnel 一键穿透
+- Web 管理台，多账号管理
 - 微信内更新——回复「确认更新」即可升级，无需 SSH
 
 ## 快速开始
@@ -40,9 +40,7 @@ docker compose run --rm dingdong setup
 docker compose up -d
 ```
 
-`setup` 会引导配置模型、搜索、时区、管理密码和公网访问方式。管理密码自动生成并打印，请妥善保存。
-
-如果 setup 时选择了 Cloudflare Tunnel，启动后公网地址会自动显示在管理台页面上，无需域名和证书。
+`setup` 会引导配置模型、搜索、时区和管理密码。管理密码自动生成并打印，请妥善保存。
 
 ## 使用
 
@@ -79,6 +77,8 @@ docker compose up -d
 - 删除或重新登录账号
 
 每个用户的任务和对话完全隔离，LLM 和服务器资源共享。
+
+如需公网访问，配置 Nginx 反向代理指向 `http://127.0.0.1:8081` 即可。
 
 ## 命令行
 
@@ -135,7 +135,7 @@ v0.8.0 更改了 `docker-compose.yml`（默认命令从 `start` 改为 `serve`�
 ```bash
 cd dingdong
 git pull                                  # 拉取新的 docker-compose.yml
-docker compose run --rm dingdong setup    # 配置管理密码和穿透
+docker compose run --rm dingdong setup    # 配置管理密码
 docker compose up -d                      # 用新配置重启
 ```
 

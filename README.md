@@ -28,7 +28,7 @@ WeChat scheduled-task assistant. Create, modify and trigger timed tasks with nat
 - Image understanding (auto-detect or separate vision model)
 - Token-aware context management — adapts to your model's context window
 - Multi-account — one server, multiple users, fully isolated
-- Admin panel with Cloudflare Tunnel auto-setup
+- Web admin panel for account management
 - WeChat in-chat update — reply "confirm update" to upgrade without SSH
 
 ## Quick Start
@@ -40,9 +40,7 @@ docker compose run --rm dingdong setup
 docker compose up -d
 ```
 
-`setup` walks you through model, search, timezone, admin password, and public access. The admin password is auto-generated and printed — save it.
-
-If you chose Cloudflare Tunnel during setup, the public URL appears in the admin panel automatically after startup. No domain or certificate needed.
+`setup` walks you through model, search, timezone, and admin password. The admin password is auto-generated and printed — save it.
 
 ## Usage
 
@@ -79,6 +77,8 @@ From the panel you can:
 - Remove or re-login accounts
 
 Each user's tasks and conversations are fully isolated. LLM and server resources are shared.
+
+For public access, set up an Nginx reverse proxy pointing to `http://127.0.0.1:8081`.
 
 ## CLI
 
@@ -135,7 +135,7 @@ v0.8.0 changes `docker-compose.yml` (default command switched from `start` to `s
 ```bash
 cd dingdong
 git pull                                  # get new docker-compose.yml
-docker compose run --rm dingdong setup    # configure admin password + tunnel
+docker compose run --rm dingdong setup    # configure admin password
 docker compose up -d                      # restart with new config
 ```
 

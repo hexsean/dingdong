@@ -7,10 +7,8 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import signal
-import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -65,8 +63,6 @@ class Server:
 
         self._login_sessions: dict[str, dict[str, Any]] = {}
         self._login_lock = threading.Lock()
-        self._tunnel_url: str | None = None
-        self._tunnel_proc: subprocess.Popen | None = None
 
     # ── main ──
 
@@ -85,11 +81,9 @@ class Server:
         from .admin_api import AdminAPI
         api = AdminAPI(self, port=self._cfg.admin_api_port, password=self._cfg.admin_password)
         api.start()
-        self._start_tunnel()
 
         self._stop.wait()
         api.stop()
-        self._stop_tunnel()
         self._shutdown()
 
     # ── account management (public, for AdminAPI) ──
@@ -349,44 +343,6 @@ class Server:
                 signal.signal(sig, _handle)
             except ValueError:
                 pass
-
-    @property
-    def tunnel_url(self) -> str | None:
-        return self._tunnel_url
-
-    def _start_tunnel(self) -> None:
-        if not self._cfg.cf_tunnel:
-            return
-        try:
-            self._tunnel_proc = subprocess.Popen(
-                ["cloudflared", "tunnel", "--no-autoupdate",
-                 "--url", f"http://localhost:{self._cfg.admin_api_port}"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            )
-        except FileNotFoundError:
-            log.warning("cloudflared not found; tunnel disabled")
-            return
-
-        def _capture():
-            for raw_line in self._tunnel_proc.stdout:
-                line = raw_line.decode(errors="replace")
-                m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-                if m:
-                    self._tunnel_url = m.group(0)
-                    log.info("tunnel ready: %s", self._tunnel_url)
-                    break
-            for _ in self._tunnel_proc.stdout:
-                pass
-
-        threading.Thread(target=_capture, daemon=True, name="tunnel-capture").start()
-
-    def _stop_tunnel(self) -> None:
-        if self._tunnel_proc:
-            self._tunnel_proc.terminate()
-            try:
-                self._tunnel_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._tunnel_proc.kill()
 
     def _start_restart_watcher(self) -> None:
         from .restart import RESTART_CHECK_INTERVAL_SECONDS, restart_marker_signature

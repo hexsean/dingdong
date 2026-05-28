@@ -32,7 +32,6 @@ class Config:
     watchtower_token: str
     admin_api_port: int
     admin_password: str
-    cf_tunnel: bool
 
     @property
     def db_path(self) -> Path:
@@ -96,5 +95,4 @@ def load_config() -> Config:
         watchtower_token=os.getenv("WATCHTOWER_HTTP_API_TOKEN", ""),
         admin_api_port=int(os.getenv("ADMIN_API_PORT", "8081")),
         admin_password=os.getenv("ADMIN_PASSWORD", ""),
-        cf_tunnel=os.getenv("CF_TUNNEL", "").strip().lower() in ("1", "true", "yes"),
     )
