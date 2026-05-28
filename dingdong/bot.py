@@ -19,7 +19,7 @@ from typing import Any
 from .config import Config
 from .executor import JobExecutor
 from .ilink import ILinkClient, ILinkError
-from .intent import IntentRouter
+from .intent import IntentRouter, split_bubbles
 from .llm import build_provider, build_vision_provider
 from .login import ensure_login, load_session, save_session
 from .models import fetch_model_info
@@ -184,13 +184,15 @@ class Bot:
         typing_stop.set()
         if image_note and reply:
             reply = image_note + reply
-        if reply:
-            log.info("reply (%d chars): %s", len(reply), reply[:200])
-            ok = self._client.safe_send_text(owner, reply, ctx)
-            if ok:
-                log.info("reply sent successfully")
-            else:
-                log.error("reply send FAILED after retries")
+        parts = split_bubbles(reply)
+        if parts:
+            for i, part in enumerate(parts):
+                if i > 0:
+                    self._show_typing(owner, ctx)
+                    self._stop.wait(0.5)  # 条间间隔，模拟真人逐条发送
+                ok = self._client.safe_send_text(owner, part, ctx)
+                log.info("reply bubble %d/%d (%d chars): %s",
+                         i + 1, len(parts), len(part), "ok" if ok else "FAILED")
         else:
             log.warning("intent returned empty reply")
         self._cancel_typing(owner, ctx)

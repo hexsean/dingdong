@@ -89,13 +89,12 @@ def _estimate_tool_spec_tokens(tools: list[ToolSpec]) -> int:
 CLEAR_KEYWORDS = {"清空对话", "新对话", "重置对话", "清除历史"}
 GREETING_KEYWORDS = {"你好", "hi", "hello", "hey", "嗨", "在吗", "在不在", "你在吗"}
 GREETING_REPLY = (
-    "在的。可以这样说：\n"
-    "- 「每天 9 点提醒我喝水」\n"
-    "- 「每个工作日 18 点提醒我写日报」\n"
-    "- 「每周五 17:30 给我一份周复盘提纲」\n"
-    "- 「每月 1 号提醒我检查订阅扣费」\n"
-    "- 「明天 8 点提醒我带身份证」\n"
-    "- 「我有哪些任务」"
+    "在的 👋[下一条]"
+    "想定点啥提醒？直接跟我说就行，比如：\n"
+    "· 每天 9 点提醒我喝水\n"
+    "· 每个工作日 18 点提醒我写日报\n"
+    "· 明天 8 点提醒我带身份证[下一条]"
+    "想看现在有哪些任务，发「我有哪些任务」就行～"
 )
 UPDATE_KEYWORDS = {"更新叮咚", "升级叮咚", "立即更新", "开始更新"}
 UPDATE_STATUS_KEYWORDS = {"更新状态", "查看更新状态"}
@@ -105,20 +104,24 @@ DELETE_ALL_CONFIRM_KEYWORDS = {"确认删除全部", "确认删除所有任务",
 DELETE_ALL_CANCEL_KEYWORDS = {"取消", "取消删除", "不用", "不删了", "no", "n"}
 
 INTENT_SYSTEM_PROMPT = """\
-你是叮咚，微信定时任务助手。极简回复，不废话。
+你是叮咚，微信定时任务助手。说话像微信里的朋友：自然、口语、简短，别像机器人念说明书。
 
-用工具管理任务。有 search_web 时可搜索。日常对话简短回。
+表达：
+- 默认简短，能一句说清就一句，不废话。
+- 需要多说几句时（介绍自己、解释你能做啥、给建议），拆成几条短消息，用单独一行 [下一条] 分隔，别堆成一大段。
+- 例外：搜索/资料类结果要详细完整，列出要点和来源，整条发出，不要用 [下一条] 拆条。可用 read_url 获取页面详情后再总结。
+
+用工具管理任务。有 search_web 时可搜索。
 
 严格规则：
 - 用户说"删除"就只调 delete_job，不要先 list 再删，直接按名称或 id 删
 - 用户要删多个任务，用 job_ids 数组一次删完，或用 job_id="all" 全删
 - 用户问任务列表，只调 list_jobs，不要创建任何任务
 - 不要自作主张创建用户没要求的任务
-- 创建/修改/删除任务回复一句话说完
+- 创建/修改/删除任务，确认一句话就够
 - 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
-- 搜索结果要详细展示：列出要点、来源，不要过度压缩。可用 read_url 获取页面详情后再总结
 
-用户问功能时告知：发"清空对话"重置记录；"我有哪些任务"查看列表；发"检查更新"查看版本；换绑需在服务器操作。
+用户问你能做什么，可以热情点、分几条说（用 [下一条]）：你能帮他定各种定时提醒和任务，到点用微信戳他；顺带提一句发「我有哪些任务」看列表、「清空对话」重置记录。
 
 任务字段：name(名称) goal(目标描述) schedule_kind(cron/interval/date)
 - cron: cron_expression 5字段
@@ -127,6 +130,16 @@ INTENT_SYSTEM_PROMPT = """\
 
 相对时间转绝对值，本地时区。
 """
+
+# 回复分条标记：模型用它把一段回复拆成多条短消息，发送端按此拆开逐条发出。
+BUBBLE_SEP = "[下一条]"
+
+
+def split_bubbles(reply: str) -> list[str]:
+    """把一段回复按 BUBBLE_SEP 拆成多条短消息（去空、去首尾空白）。"""
+    if not reply:
+        return []
+    return [p for p in (s.strip() for s in reply.split(BUBBLE_SEP)) if p]
 
 
 def _job_to_brief(job: Job) -> dict[str, Any]:
@@ -312,57 +325,57 @@ class IntentRouter:
                     return self._start_update(owner_user_id, context_token, latest)
                 if stripped in CANCEL_KEYWORDS or stripped.lower() in CANCEL_KEYWORDS:
                     self._pending_update.pop(owner_user_id, None)
-                    return "已取消更新。"
+                    return "好，先不更新。"
                 if stripped.lower() in CONFIRM_KEYWORDS:
-                    return "为避免误操作，请回复「确认更新」开始；回复「取消更新」放弃。"
+                    return "稳一点哈，回「确认更新」我就开始，回「取消更新」就先放着。"
                 if stripped not in CHECK_UPDATE_KEYWORDS and stripped not in UPDATE_KEYWORDS and stripped not in UPDATE_STATUS_KEYWORDS:
                     self._pending_update.pop(owner_user_id, None)
             if owner_user_id in self._pending_delete_all:
                 self._pending_delete_all.discard(owner_user_id)
                 if stripped in DELETE_ALL_CONFIRM_KEYWORDS:
                     result = self._tool_delete_job({"job_id": "all", "confirm": "yes"}, owner_user_id)
-                    return _quick_reply("delete_job", result) or "已删除全部任务。"
+                    return _quick_reply("delete_job", result) or "好，所有任务都清掉了。"
                 if stripped in DELETE_ALL_CANCEL_KEYWORDS or stripped.lower() in DELETE_ALL_CANCEL_KEYWORDS:
-                    return "已取消删除全部任务。"
-                return "已取消删除全部任务。"
+                    return "好，任务都留着，没删。"
+                return "好，任务都留着，没删。"
             if owner_user_id in self._pending_clear:
                 self._pending_clear.discard(owner_user_id)
                 if stripped.lower() in CONFIRM_KEYWORDS:
                     n = self._store.clear_history(owner_user_id, account_id=self._account_id or None)
-                    return f"已清空对话记录（{n} 条）。"
-                return "已取消。"
+                    return f"清好啦，删了 {n} 条记录，咱们重新开始～"
+                return "好，那就不动它。"
             if stripped in CLEAR_KEYWORDS:
                 self._pending_clear.add(owner_user_id)
-                return "确认清空所有对话记录？回复「确认」执行。"
+                return "要把咱俩的聊天记录都清掉吗？回个「确认」我就清。"
             if stripped.lower() in GREETING_KEYWORDS:
                 self._store.append_message(owner_user_id, "user", text, account_id=self._account_id)
                 self._store.append_message(owner_user_id, "assistant", GREETING_REPLY, account_id=self._account_id)
                 return GREETING_REPLY
             if stripped == "关闭更新提醒":
                 if not self._is_admin:
-                    return "更新操作仅限管理员账号。"
+                    return "这个操作只有管理员能用哦。"
                 set_disabled(self._store.db_path.parent, True)
                 return "已关闭更新提醒。发「开启更新提醒」可恢复。"
             if stripped == "开启更新提醒":
                 if not self._is_admin:
-                    return "更新操作仅限管理员账号。"
+                    return "这个操作只有管理员能用哦。"
                 set_disabled(self._store.db_path.parent, False)
                 return "已开启更新提醒。"
             if stripped in CHECK_UPDATE_KEYWORDS:
                 if not self._is_admin:
-                    return "更新操作仅限管理员账号。"
+                    return "这个操作只有管理员能用哦。"
                 return self._check_update(owner_user_id)
             if stripped in UPDATE_CONFIRM_KEYWORDS:
                 if not self._is_admin:
-                    return "更新操作仅限管理员账号。"
+                    return "这个操作只有管理员能用哦。"
                 return self._confirm_update(owner_user_id, context_token)
             if stripped in UPDATE_STATUS_KEYWORDS:
                 if not self._is_admin:
-                    return "更新操作仅限管理员账号。"
+                    return "这个操作只有管理员能用哦。"
                 return self._update_status()
             if stripped in UPDATE_KEYWORDS:
                 if not self._is_admin:
-                    return "更新操作仅限管理员账号。"
+                    return "这个操作只有管理员能用哦。"
                 return self._prepare_update(owner_user_id)
 
             shortcut = self._try_shortcut(stripped, owner_user_id)
@@ -449,7 +462,7 @@ class IntentRouter:
 
             messages.append({"role": "user", "content": tool_results})
 
-        fallback = "（已达到工具调用上限，请把指令拆开说）"
+        fallback = "这条有点绕，我没一次搞定，能拆开分两次说说吗？"
         self._store.append_message(owner_user_id, "assistant", fallback, account_id=self._account_id)
         return fallback
 
@@ -544,7 +557,7 @@ class IntentRouter:
         lines = [f"当前版本 v{lv}，最新版本 v{rv}。"]
         if self._can_wechat_update():
             self._pending_update[owner_user_id] = rv
-            lines.append("为避免误操作，请回复「确认更新」开始；回复「取消更新」放弃。")
+            lines.append("稳一点哈，回「确认更新」我就开始，回「取消更新」就先放着。")
         else:
             lines.append(WECHAT_UPDATE_DISABLED_HINT)
         return "\n".join(lines)
@@ -568,7 +581,7 @@ class IntentRouter:
         if not is_newer_version(rv, lv):
             return f"当前版本 v{lv}，已是最新。"
         self._pending_update[owner_user_id] = rv
-        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n为避免误操作，请回复「确认更新」开始；回复「取消更新」放弃。"
+        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n稳一点哈，回「确认更新」我就开始，回「取消更新」就先放着。"
 
     def _start_update(self, owner_user_id: str, context_token: str, latest: str) -> str:
         if not self._can_wechat_update():
@@ -667,7 +680,7 @@ class IntentRouter:
     def _tool_list_jobs(self, owner_user_id: str) -> str:
         jobs = self._store.list_jobs(owner_user_id=owner_user_id, account_id=self._account_id or None)
         if not jobs:
-            return _ok({"jobs": []}, note="还没有任务。试试：「每天 9 点提醒我喝水」。")
+            return _ok({"jobs": []}, note="还没有任务呢，试试发「每天 9 点提醒我喝水」～")
         briefs = []
         for j in jobs:
             b = _job_to_brief(j)
@@ -704,7 +717,7 @@ class IntentRouter:
     def _tool_update_job(self, args: dict[str, Any], owner_user_id: str, context_token: str) -> str:
         job = self._resolve_job(args.get("job_id", ""), owner_user_id)
         if job is None:
-            return _err("找不到该任务")
+            return _err("没找到这个任务诶，发「我有哪些任务」看看？")
         fields: dict[str, Any] = {"context_token": context_token}
         for k in ("name", "goal"):
             if k in args:
@@ -773,7 +786,7 @@ class IntentRouter:
     def _tool_set_enabled(self, args: dict[str, Any], owner_user_id: str) -> str:
         job = self._resolve_job(args.get("job_id", ""), owner_user_id)
         if job is None:
-            return _err("找不到该任务")
+            return _err("没找到这个任务诶，发「我有哪些任务」看看？")
         enabled = bool(args.get("enabled", True))
         updated = self._store.update_fields(job.id, enabled=enabled)
         if updated is None:
@@ -785,7 +798,7 @@ class IntentRouter:
     def _tool_run_now(self, args: dict[str, Any], owner_user_id: str) -> str:
         job = self._resolve_job(args.get("job_id", ""), owner_user_id)
         if job is None:
-            return _err("找不到该任务")
+            return _err("没找到这个任务诶，发「我有哪些任务」看看？")
         self._scheduler.trigger_now(job)
         return _ok({"queued_id": job.id, "queued_name": job.name})
 
@@ -829,28 +842,28 @@ def _quick_reply(tool_name: str, result_json: str) -> str | None:
 
     if tool_name == "create_job":
         c = r.get("created", {})
-        return f"已创建「{c.get('name', '')}」，{r.get('schedule_human', '')}，下次触发：{_fmt_time(r.get('next_run_at'))}。"
+        return f"搞定，已设好「{c.get('name', '')}」，{r.get('schedule_human', '')}，下次 {_fmt_time(r.get('next_run_at'))} 提醒你。"
 
     if tool_name == "update_job":
         u = r.get("updated", {})
-        return f"已更新「{u.get('name', '')}」，{r.get('schedule_human', '')}。"
+        return f"好的，「{u.get('name', '')}」改好了，{r.get('schedule_human', '')}。"
 
     if tool_name == "delete_job":
         names = r.get("deleted_names", [])
         count = r.get("deleted_count", len(names))
         if count == 1 and names:
-            return f"已删除「{names[0]}」。"
-        return f"已删除 {count} 个任务。"
+            return f"好，「{names[0]}」删掉了。"
+        return f"好，删掉了 {count} 个任务。"
 
     if tool_name == "set_enabled":
         status = "启用" if r.get("enabled") else "暂停"
-        return f"已{status}。"
+        return f"好，已{status}。"
 
     if tool_name == "run_now":
-        return f"已触发「{r.get('queued_name', '')}」。"
+        return f"好，「{r.get('queued_name', '')}」这就跑一次。"
 
     if tool_name == "list_jobs" and not r.get("jobs"):
-        return r.get("note") or "还没有任务。试试：「每天 9 点提醒我喝水」。"
+        return r.get("note") or "还没有任务呢，试试发「每天 9 点提醒我喝水」～"
 
     # 非空 list_jobs / get_current_time 是只读查询，可能是多步操作的前置步骤，不拦截
 

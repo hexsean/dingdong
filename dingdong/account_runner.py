@@ -8,7 +8,9 @@ LLM / JobStore / Scheduler 由外部传入（多账号共享）。
 from __future__ import annotations
 
 import logging
+import queue
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Config
 from .ilink import ILinkClient, ILinkError
-from .intent import IntentRouter
+from .intent import IntentRouter, split_bubbles
 from .llm import LLMProvider
 from .login import ensure_login, load_session, save_session
 from .models import ModelInfo
@@ -29,6 +31,12 @@ EXECUTOR_SYSTEM_PROMPT = """\
 你是叮咚。根据任务目标生成要发给用户的微信消息。
 直接输出消息内容，不要前缀。简洁，中文，注意当前时间。
 """
+
+# 仅当首条消息带图片时，短暂等待合并同一用户紧随其后的消息
+# （微信常把"图片"和"配文"拆成两条消息发出）。纯文字消息不受影响、立即处理。
+IMAGE_COALESCE_SECONDS = 2.0
+# 多条消息之间的间隔，模拟真人逐条发送。
+BUBBLE_GAP_SECONDS = 0.5
 
 
 class AccountRunner:
@@ -56,6 +64,8 @@ class AccountRunner:
         self._stop = threading.Event()
         self._typing_tickets: dict[str, str] = {}
         self._poll_thread: threading.Thread | None = None
+        self._dispatch_thread: threading.Thread | None = None
+        self._inbox: "queue.Queue[Any]" = queue.Queue()
 
         self._session_dir = cfg.data_dir / "sessions" / account_id
         self._session_dir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +134,10 @@ class AccountRunner:
         if self._poll_thread and self._poll_thread.is_alive():
             return
         self._stop.clear()
+        self._dispatch_thread = threading.Thread(
+            target=self._dispatch_loop, daemon=True, name=f"dispatch-{self.account_id}"
+        )
+        self._dispatch_thread.start()
         self._poll_thread = threading.Thread(
             target=self._poll_loop, daemon=True, name=f"poll-{self.account_id}"
         )
@@ -132,8 +146,11 @@ class AccountRunner:
 
     def stop(self) -> None:
         self._stop.set()
+        self._inbox.put(None)  # 唤醒可能阻塞在取消息的分发线程
         if self._poll_thread:
             self._poll_thread.join(timeout=10)
+        if self._dispatch_thread:
+            self._dispatch_thread.join(timeout=10)
         log.info("account %s stopped", self.account_id)
 
     def is_running(self) -> bool:
@@ -194,7 +211,7 @@ class AccountRunner:
                 for m in msgs:
                     if not m.is_user_message:
                         continue
-                    self._handle_message(m)
+                    self._inbox.put(m)  # 交给分发线程串行处理，poll 不阻塞，才能及时收到后续消息
                 backoff = 1.0
             except ILinkError as exc:
                 if self._stop.is_set():
@@ -210,13 +227,56 @@ class AccountRunner:
                 self._stop.wait(backoff)
                 backoff = min(backoff * 2, 30.0)
 
-    def _handle_message(self, msg: Any) -> None:
-        text = (msg.text or "").strip()
-        images = getattr(msg, "images", []) or []
+    # ── dispatch (per-account serial; coalesce image+caption) ──
+
+    def _dispatch_loop(self) -> None:
+        """串行消费 inbox：纯文字立即处理；首条带图片则短暂等待合并同一用户的后续消息。"""
+        while not self._stop.is_set():
+            try:
+                first = self._inbox.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if first is None:  # stop 唤醒哨兵
+                continue
+
+            owner = first.from_user_id
+            ctx = first.context_token
+            texts = [first.text] if first.text else []
+            images = list(getattr(first, "images", []) or [])
+
+            # 仅图片场景才等待合并：微信会把图片与配文拆成两条紧邻的消息
+            if images:
+                deadline = time.monotonic() + IMAGE_COALESCE_SECONDS
+                while not self._stop.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        nxt = self._inbox.get(timeout=remaining)
+                    except queue.Empty:
+                        break
+                    if nxt is None:
+                        break
+                    if nxt.from_user_id != owner:
+                        self._inbox.put(nxt)  # 别的用户，放回去稍后处理，不并入本轮
+                        break
+                    if nxt.context_token:
+                        ctx = nxt.context_token
+                    if nxt.text:
+                        texts.append(nxt.text)
+                    images.extend(getattr(nxt, "images", []) or [])
+                    if nxt.text:
+                        break  # 等到配文，合并完成，立即回复
+
+            try:
+                self._process(owner, ctx, "\n".join(t for t in texts if t), images)
+            except Exception:
+                log.exception("account %s dispatch error", self.account_id)
+
+    def _process(self, owner: str, ctx: str, text: str, images: list) -> None:
+        text = (text or "").strip()
         if not text and not images:
             return
-        owner = msg.from_user_id
-        ctx = msg.context_token
 
         if self._cfg.allowed_user_ids and owner not in self._cfg.allowed_user_ids:
             self._client.safe_send_text(owner, "你不在该 bot 的允许列表中。", ctx)
@@ -226,18 +286,17 @@ class AccountRunner:
         failed_images = 0
         for img in images:
             try:
-                data = self._client.download_image(img)
-                image_bytes_list.append(data)
+                image_bytes_list.append(self._client.download_image(img))
             except Exception:
                 failed_images += 1
                 log.exception("image download failed")
 
         if images and not image_bytes_list:
-            self._client.safe_send_text(owner, "图片下载失败了，请重新发送一次。", ctx)
+            self._client.safe_send_text(owner, "图片好像没收到，再发一次试试？", ctx)
             return
         image_note = ""
         if failed_images:
-            image_note = f"有 {failed_images} 张图片没读到，我先处理已收到的图片。\n"
+            image_note = f"有 {failed_images} 张图片没读到，我先看已收到的。\n"
 
         log.info("account %s inbound from %s: %s (images: %d)",
                  self.account_id, owner, text[:120], len(image_bytes_list))
@@ -249,15 +308,23 @@ class AccountRunner:
                 text=text,
                 image_bytes_list=image_bytes_list,
             )
-        except Exception as exc:
+        except Exception:
             log.exception("intent handling failed")
-            reply = "处理失败，我没有执行任何任务变更。请重试一次；若连续失败，请发「清空对话」重置上下文。"
+            reply = "处理失败，我没动你的任何任务。再发一次试试；要是一直失败，发「清空对话」重置一下。"
         typing_stop.set()
         if image_note and reply:
             reply = image_note + reply
-        if reply:
-            self._client.safe_send_text(owner, reply, ctx)
+        self._send_reply(owner, ctx, reply)
         self._cancel_typing(owner, ctx)
+
+    def _send_reply(self, owner: str, ctx: str, reply: str) -> None:
+        """把回复按 BUBBLE_SEP 拆成多条短消息逐条发出，条间带打字状态。"""
+        parts = split_bubbles(reply)
+        for i, part in enumerate(parts):
+            if i > 0:
+                self._show_typing(owner, ctx)
+                self._stop.wait(BUBBLE_GAP_SECONDS)
+            self._client.safe_send_text(owner, part, ctx)
 
     # ── typing ──
 
