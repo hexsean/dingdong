@@ -13,15 +13,6 @@ services:
     tty: true
     stdin_open: true
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate --url http://dingdong:8081
-    depends_on:
-      - dingdong
-    profiles:
-      - tunnel
-
   watchtower:
     image: containrrr/watchtower
     restart: unless-stopped

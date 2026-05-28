@@ -46,6 +46,11 @@
       </button>
     </div>
 
+    <div class="hidden mb-4 px-4 py-3 bg-green-50 border border-green-200 rounded-lg text-sm">
+      <span class="text-green-700">公网地址：</span>
+      <a id="dash-tunnel" href="#" target="_blank" class="text-green-700 font-mono underline"></a>
+    </div>
+
     <div id="dash-empty" class="hidden text-center py-16">
       <div class="text-5xl mb-4">📭</div>
       <p class="text-gray-400 mb-4">还没有叮咚助手</p>
@@ -135,7 +140,14 @@ document.addEventListener('keydown', e => {
 
 async function loadStatus() {
   const r = await api('GET', '/api/status');
-  if (r.status === 200) document.getElementById('dash-ver').textContent = 'v' + r.data.version;
+  if (r.status !== 200) return;
+  document.getElementById('dash-ver').textContent = 'v' + r.data.version;
+  const tb = document.getElementById('dash-tunnel');
+  if (r.data.tunnel_url) {
+    tb.href = r.data.tunnel_url;
+    tb.textContent = r.data.tunnel_url;
+    tb.parentElement.classList.remove('hidden');
+  }
 }
 
 async function loadAccounts() {

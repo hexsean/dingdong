@@ -27,6 +27,8 @@ WeChat scheduled-task assistant. Create, modify and trigger timed tasks with nat
 - Web search (Exa) and URL reading
 - Image understanding (auto-detect or separate vision model)
 - Token-aware context management — adapts to your model's context window
+- Multi-account — one server, multiple users, fully isolated
+- Admin panel with Cloudflare Tunnel auto-setup
 - WeChat in-chat update — reply "confirm update" to upgrade without SSH
 
 ## Quick Start
@@ -38,14 +40,9 @@ docker compose run --rm dingdong setup
 docker compose up -d
 ```
 
-Need public access? Add `--profile tunnel` to enable Cloudflare Tunnel:
-```bash
-docker compose --profile tunnel up -d
-```
+`setup` walks you through model, search, timezone, admin password, and public access. The admin password is auto-generated and printed — save it.
 
-`setup` walks you through model, search, timezone, admin password, and public access. Re-run it anytime to change config — the service restarts automatically.
-
-**Upgrading from an older version?** Run `git pull` first to update `docker-compose.yml`, then re-run `setup`.
+If you chose Cloudflare Tunnel during setup, the public URL appears in the admin panel automatically after startup. No domain or certificate needed.
 
 ## Usage
 
@@ -72,6 +69,17 @@ Quick reference:
 | `check update` | Check for new version |
 | `confirm update` | Execute the update |
 
+## Admin Panel
+
+After startup, open `http://your-server:8081` and log in with the admin password from setup.
+
+From the panel you can:
+- Add assistants — generate QR codes and send to users
+- View account status (online / offline / pending)
+- Remove or re-login accounts
+
+Each user's tasks and conversations are fully isolated. LLM and server resources are shared.
+
 ## CLI
 
 | Command | Description |
@@ -86,14 +94,12 @@ Local development (without Docker):
 
 ```bash
 python main.py setup    # configure
-python main.py start    # run
+python main.py start    # run (single-account)
+python main.py serve    # run (multi-account server)
 python main.py status   # check status
-python main.py logout   # clear session
 ```
 
 ## Model Providers
-
-The setup wizard supports these providers out of the box:
 
 | Provider | Type | Default Model |
 |----------|------|---------------|
@@ -107,46 +113,9 @@ The setup wizard supports these providers out of the box:
 | Moonshot | OpenAI-compatible | moonshot-v1-8k |
 | Custom | OpenAI-compatible | (your choice) |
 
-## Admin Panel
-
-After `setup`, the admin panel runs at `http://your-server:8081`. From there you can add assistants, generate QR codes for users, and manage accounts. The admin password is auto-generated during setup.
-
-Multiple users can each scan a QR code to bind their own dingdong assistant. Tasks and conversations are fully isolated; LLM and server resources are shared.
-
-### Public Access
-
-To let users scan QR codes remotely, expose the admin panel to the internet:
-
-**Option A: Cloudflare Tunnel** (quickest, free HTTPS, no domain needed)
-
-```bash
-# Install cloudflared, then:
-cloudflared tunnel --url http://localhost:8081
-```
-
-Gives you a public `https://*.trycloudflare.com` URL instantly.
-
-**Option B: Nginx reverse proxy**
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name dingdong.example.com;
-    ssl_certificate     /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8081;
-        proxy_set_header Host $host;
-    }
-}
-```
-
 ## Update
 
-Two ways to update:
-
-**In WeChat** (recommended for daily use):
+**In WeChat** (recommended):
 
 ```
 check update
@@ -158,6 +127,19 @@ confirm update
 ```bash
 docker compose pull && docker compose up -d
 ```
+
+**Upgrading from v0.7.x or earlier?**
+
+v0.8.0 changes `docker-compose.yml` (default command switched from `start` to `serve`). Existing users:
+
+```bash
+cd dingdong
+git pull                                  # get new docker-compose.yml
+docker compose run --rm dingdong setup    # configure admin password + tunnel
+docker compose up -d                      # restart with new config
+```
+
+Your existing tasks and login session are automatically migrated. No data loss.
 
 ## License
 

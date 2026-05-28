@@ -204,7 +204,10 @@ class _Handler(BaseHTTPRequestHandler):
             from .updater import local_version
             accounts = self._app.list_accounts()
             online = sum(1 for a in accounts if a.get("online"))
-            self._json(200, {"version": local_version(), "accounts": len(accounts), "online": online})
+            self._json(200, {
+                "version": local_version(), "accounts": len(accounts), "online": online,
+                "tunnel_url": self._app.tunnel_url,
+            })
             return
 
         self._json(404, {"error": "not found"})

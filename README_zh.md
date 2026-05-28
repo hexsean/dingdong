@@ -27,6 +27,8 @@
 - 联网搜索（Exa）和网页读取
 - 图片理解（自动检测或独立视觉模型）
 - 基于 token 的上下文管理——自动适配模型上下文窗口
+- 多账号——一台服务器，多人使用，完全隔离
+- 管理台 + Cloudflare Tunnel 一键穿透
 - 微信内更新——回复「确认更新」即可升级，无需 SSH
 
 ## 快速开始
@@ -38,14 +40,9 @@ docker compose run --rm dingdong setup
 docker compose up -d
 ```
 
-需要公网访问管理台？加 `--profile tunnel` 开启 Cloudflare Tunnel：
-```bash
-docker compose --profile tunnel up -d
-```
+`setup` 会引导配置模型、搜索、时区、管理密码和公网访问方式。管理密码自动生成并打印，请妥善保存。
 
-`setup` 会引导配置模型、搜索、时区、管理密码和公网访问方式。以后修改配置，再次运行 `setup` 即可，主服务会自动重启。
-
-**从旧版本升级？** 先 `git pull` 更新 `docker-compose.yml`，再重新运行 `setup`。
+如果 setup 时选择了 Cloudflare Tunnel，启动后公网地址会自动显示在管理台页面上，无需域名和证书。
 
 ## 使用
 
@@ -72,6 +69,17 @@ docker compose --profile tunnel up -d
 | `检查更新` | 查看版本并准备更新 |
 | `确认更新` | 执行更新 |
 
+## 管理台
+
+启动后打开 `http://你的服务器:8081`，用 setup 时生成的密码登录。
+
+在管理台可以：
+- 添加助手——生成二维码发给用户扫码绑定
+- 查看账号状态（在线 / 离线 / 待扫码）
+- 删除或重新登录账号
+
+每个用户的任务和对话完全隔离，LLM 和服务器资源共享。
+
 ## 命令行
 
 | 命令 | 说明 |
@@ -86,14 +94,12 @@ docker compose --profile tunnel up -d
 
 ```bash
 python main.py setup    # 配置
-python main.py start    # 启动
+python main.py start    # 启动（单账号）
+python main.py serve    # 启动（多账号服务器）
 python main.py status   # 查看状态
-python main.py logout   # 清除登录态
 ```
 
 ## 模型渠道
-
-配置向导内置以下渠道：
 
 | 渠道 | 类型 | 默认模型 |
 |------|------|----------|
@@ -107,46 +113,9 @@ python main.py logout   # 清除登录态
 | Moonshot | OpenAI 兼容 | moonshot-v1-8k |
 | 自定义 | OpenAI 兼容 | 自行填写 |
 
-## 管理台
-
-`setup` 完成后，管理台运行在 `http://你的服务器:8081`。管理密码在 setup 时自动生成。
-
-在管理台可以添加助手、生成二维码发给用户扫码绑定。每个用户的任务和对话完全隔离，LLM 和服务器资源共享。
-
-### 从公网访问
-
-要让用户远程扫码，需要把管理台暴露到公网：
-
-**方案一：Cloudflare Tunnel**（最快，免费 HTTPS，无需域名）
-
-```bash
-# 安装 cloudflared 后：
-cloudflared tunnel --url http://localhost:8081
-```
-
-立即获得一个公网 `https://*.trycloudflare.com` 地址。
-
-**方案二：Nginx 反向代理**
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name dingdong.example.com;
-    ssl_certificate     /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8081;
-        proxy_set_header Host $host;
-    }
-}
-```
-
 ## 更新
 
-两种更新方式：
-
-**微信内更新**（日常推荐）：
+**微信内更新**（推荐）：
 
 ```
 检查更新
@@ -158,6 +127,19 @@ server {
 ```bash
 docker compose pull && docker compose up -d
 ```
+
+**从 v0.7.x 或更早版本升级？**
+
+v0.8.0 更改了 `docker-compose.yml`（默认命令从 `start` 改为 `serve`）。老用户升级：
+
+```bash
+cd dingdong
+git pull                                  # 拉取新的 docker-compose.yml
+docker compose run --rm dingdong setup    # 配置管理密码和穿透
+docker compose up -d                      # 用新配置重启
+```
+
+已有的任务和登录态会自动迁移，不会丢失数据。
 
 ## License
 
