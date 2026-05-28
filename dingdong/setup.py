@@ -368,49 +368,20 @@ def run_setup(data_dir: str = "./data") -> None:
     _section("[6/6] 微信内更新")
     _setup_wechat_update(env, existing)
 
-    # ── 保存 & 登录 ──
+    # ── 保存 ──
 
     env["DATA_DIR"] = str(data)
     _write_env(env_file, env)
     _write_updater_env(data / "updater.env", env)
 
-    print()
-    session_path = data / "session.json"
-    if session_path.exists():
-        relogin = _ask("已有登录态，重新登录？(y/N)", "N")
-        if relogin.lower() not in ("y", "yes"):
-            _request_restart(data)
-            print("\n  ✓ 配置已更新！主服务会自动重启生效。")
-            _print_update_hint(env)
-            print()
-            return
-
-    print("  微信登录")
-    os.environ.update(env)
-
-    from .config import load_config
-    from .ilink import ILinkClient
-    from .login import ensure_login
-
-    cfg = load_config()
-
-    def factory(token: str | None) -> ILinkClient:
-        return ILinkClient(bot_token=token, long_poll_timeout_ms=cfg.long_poll_timeout_ms)
-
-    try:
-        ensure_login(
-            session_path=cfg.session_path,
-            qrcode_png_path=cfg.qrcode_png_path,
-            client_factory=factory,
-        )
-    except Exception as exc:
-        print(f"\n  登录失败：{exc}")
-        print("  配置已保存，稍后重新运行 setup 即可登录。")
-        sys.exit(1)
-
     _request_restart(data)
+    port = env.get("ADMIN_API_PORT", "8081")
     print()
-    print("  ✓ 完成！启动：docker compose up -d")
+    print("  ✓ 配置完成！")
+    print()
+    print("  启动：docker compose up -d")
+    print(f"  管理台：http://你的服务器:{port}")
+    print("  在管理台添加助手、生成二维码，发给用户扫码绑定。")
     _print_update_hint(env)
     print()
 

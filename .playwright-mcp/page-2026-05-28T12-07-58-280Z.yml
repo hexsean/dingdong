@@ -1,0 +1,7 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - img [ref=e9]
+    - heading "叮咚管理台" [level=1] [ref=e12]
+    - paragraph [ref=e13]: 定时任务管家
+  - textbox "管理密码" [ref=e14]
+  - button "登 录" [ref=e15] [cursor=pointer]

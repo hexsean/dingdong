@@ -35,6 +35,9 @@ class AdminAPI:
     def __init__(self, server: "Server", port: int = 8081, password: str = "") -> None:
         self._server = server
         self._port = port
+        if not password:
+            password = secrets.token_urlsafe(16)
+            log.warning("ADMIN_PASSWORD not set; generated: %s", password)
         self._password = password
         self._sessions: dict[str, float] = {}
         self._sessions_lock = threading.Lock()
@@ -47,15 +50,12 @@ class AdminAPI:
             target=self._httpd.serve_forever, daemon=True, name="admin-api"
         )
         self._thread.start()
-        auth_hint = "password protected" if self._password else "NO PASSWORD (set ADMIN_PASSWORD)"
-        log.info("admin UI at http://0.0.0.0:%d (%s)", self._port, auth_hint)
+        log.info("admin UI at http://0.0.0.0:%d", self._port)
 
     def stop(self) -> None:
         self._httpd.shutdown()
 
     def check_login(self, password: str) -> str | None:
-        if not self._password:
-            return None
         if not hmac.compare_digest(password.encode(), self._password.encode()):
             return None
         token = secrets.token_urlsafe(32)
@@ -66,8 +66,6 @@ class AdminAPI:
         return token
 
     def verify_token(self, token: str) -> bool:
-        if not self._password:
-            return True
         with self._sessions_lock:
             expires = self._sessions.get(token, 0)
             if time.time() > expires:
@@ -81,9 +79,6 @@ class AdminAPI:
         for k in expired:
             del self._sessions[k]
 
-    @property
-    def requires_auth(self) -> bool:
-        return bool(self._password)
 
 
 _STATIC_DIR = Path(__file__).parent / "admin_static"
@@ -101,8 +96,6 @@ class _Handler(BaseHTTPRequestHandler):
         log.debug("admin: " + fmt, *args)
 
     def _check_auth(self) -> bool:
-        if not self._api.requires_auth:
-            return True
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer ") and self._api.verify_token(auth[7:]):
             return True
@@ -157,10 +150,6 @@ class _Handler(BaseHTTPRequestHandler):
 
         if parts == ("/",):
             self._serve_file(_STATIC_DIR / "index.html", "text/html; charset=utf-8")
-            return
-
-        if parts == ("api", "auth-status"):
-            self._json(200, {"requires_auth": self._api.requires_auth})
             return
 
         if not self._check_auth():

@@ -4,87 +4,280 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>叮咚管理台</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>tailwind.config={theme:{extend:{colors:{wx:'#07C160',primary:'#3B82F6'}}}}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+:root{
+  --bg:#090b10;
+  --text:#eef1f6;
+  --text-2:#9298a6;
+  --text-3:#5b626f;
+  --green:#07C160;
+  --green-bright:#2ee886;
+  --green-glow:rgba(46,232,134,.45);
+  --cyan:#2bd8ff;
+  --border:rgba(255,255,255,.08);
+  --border-hi:rgba(255,255,255,.15);
+  --surface:rgba(255,255,255,.035);
+  --surface-2:rgba(255,255,255,.07);
+  --danger:#ff5d6c;
+  --radius:18px;
+  --font:'Sora','PingFang SC','HarmonyOS Sans SC','Microsoft YaHei','微软雅黑',sans-serif;
+  --mono:'Space Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+html,body{margin:0;padding:0}
+body{
+  min-height:100vh;
+  background:var(--bg);
+  background-image:radial-gradient(rgba(255,255,255,.022) 1px,transparent 1px);
+  background-size:32px 32px;
+  color:var(--text);
+  font-family:var(--font);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+.hidden{display:none!important}
+::selection{background:rgba(46,232,134,.3);color:#fff}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:11px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18);background-clip:content-box}
+
+/* ── atmosphere ── */
+.bg-layer{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.bg-layer::before,.bg-layer::after{content:'';position:absolute;border-radius:50%}
+.bg-layer::before{width:62vw;height:62vw;top:-22vw;left:-16vw;background:radial-gradient(circle,rgba(46,232,134,.15),transparent 60%);filter:blur(30px);animation:drift1 24s ease-in-out infinite}
+.bg-layer::after{width:56vw;height:56vw;bottom:-26vw;right:-16vw;background:radial-gradient(circle,rgba(43,216,255,.11),transparent 60%);filter:blur(40px);animation:drift2 28s ease-in-out infinite}
+.grain{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.04;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* ── layout ── */
+.view{position:relative;z-index:10}
+.view-center{position:relative;z-index:10;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.container{max-width:880px;margin:0 auto;padding:42px 20px}
+
+/* ── bell ── */
+.bell-badge{position:relative;display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:linear-gradient(155deg,rgba(46,232,134,.2),rgba(46,232,134,.03));border:1px solid rgba(46,232,134,.28);box-shadow:0 0 26px -8px var(--green-glow),inset 0 1px 0 rgba(255,255,255,.1);flex:none}
+.bell-badge.lg{width:90px;height:90px;border-radius:26px}
+.bell{width:22px;height:22px;color:var(--green-bright);transform-origin:top center;filter:drop-shadow(0 0 6px var(--green-glow));animation:ring 1s cubic-bezier(.36,.07,.19,.97) .35s 1 both}
+.bell-badge.lg .bell{width:42px;height:42px}
+.bell-badge:hover .bell{animation:ring .9s cubic-bezier(.36,.07,.19,.97)}
+.bell-ring{position:absolute;inset:0;border-radius:50%;border:1px solid rgba(46,232,134,.45);opacity:0;animation:ripple 3s ease-out infinite}
+.bell-ring:nth-child(2){animation-delay:1s}
+.bell-ring:nth-child(3){animation-delay:2s}
+
+/* ── auth ── */
+.auth-card{position:relative;width:100%;max-width:384px;padding:42px 34px;border-radius:26px;background:linear-gradient(180deg,rgba(23,27,35,.72),rgba(13,16,22,.72));border:1px solid var(--border-hi);backdrop-filter:blur(18px) saturate(1.3);-webkit-backdrop-filter:blur(18px) saturate(1.3);box-shadow:0 40px 100px -30px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.07);animation:modalIn .6s cubic-bezier(.16,.84,.3,1) both}
+.auth-hero{text-align:center;margin-bottom:30px}
+.auth-hero .bell-badge{margin:0 auto}
+.auth-title{margin:20px 0 0;font-size:22px;font-weight:700;letter-spacing:.05em;background:linear-gradient(120deg,#fff,#bff3d6);-webkit-background-clip:text;background-clip:text;color:transparent}
+.auth-sub{margin:8px 0 0;font-size:12px;color:var(--text-3);letter-spacing:.34em;text-indent:.34em}
+
+/* ── fields ── */
+.field{display:block;width:100%;padding:14px 16px;border-radius:13px;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:15px;transition:border-color .25s,box-shadow .25s,background .25s}
+.field::placeholder{color:var(--text-3)}
+.field:focus{outline:none;border-color:rgba(46,232,134,.6);background:rgba(46,232,134,.05);box-shadow:0 0 0 4px rgba(46,232,134,.12),0 0 22px -10px var(--green-glow)}
+.form-err{color:#ff8a95;font-size:13px;margin:-2px 0 12px}
+
+/* ── buttons ── */
+.btn-primary,.btn-cta{position:relative;overflow:hidden;border:1px solid rgba(46,232,134,.5);background:linear-gradient(135deg,var(--green-bright),var(--green));color:#06190f;font-family:var(--font);font-weight:700;letter-spacing:.04em;cursor:pointer;transition:transform .2s,box-shadow .3s,filter .2s;box-shadow:0 10px 26px -10px var(--green-glow),inset 0 1px 0 rgba(255,255,255,.3)}
+.btn-primary{display:block;width:100%;padding:14px;border-radius:13px;font-size:15px}
+.btn-cta{display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:12px;font-size:14px}
+.btn-primary:hover,.btn-cta:hover{transform:translateY(-2px);filter:brightness(1.05);box-shadow:0 16px 36px -10px var(--green-glow),inset 0 1px 0 rgba(255,255,255,.35)}
+.btn-primary:active,.btn-cta:active{transform:translateY(0)}
+.btn-primary::after,.btn-cta::after{content:'';position:absolute;top:0;left:-130%;width:55%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.5),transparent);transform:skewX(-20deg);transition:left .6s}
+.btn-primary:hover::after,.btn-cta:hover::after{left:150%}
+.btn-cta svg{width:17px;height:17px}
+.btn-ghost{display:block;width:100%;padding:14px;border-radius:13px;border:1px solid var(--border);background:transparent;color:var(--text-2);font-family:var(--font);font-weight:500;font-size:15px;cursor:pointer;transition:.2s}
+.btn-ghost:hover{background:var(--surface-2);color:var(--text);border-color:var(--border-hi)}
+
+/* ── dashboard header ── */
+.dash-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:32px}
+.brand{display:flex;align-items:center;gap:13px}
+.brand-title{margin:0;font-size:19px;font-weight:700;letter-spacing:.02em;background:linear-gradient(120deg,#fff,#bff3d6);-webkit-background-clip:text;background-clip:text;color:transparent}
+.ver-pill{display:inline-block;margin-top:3px;font-family:var(--mono);font-size:11px;color:var(--text-3);letter-spacing:.02em}
+
+/* ── empty ── */
+.empty-state{text-align:center;padding:78px 0;animation:fadeUp .6s ease both}
+.empty-icon{width:84px;height:84px;margin:0 auto 18px;border-radius:50%;display:grid;place-items:center;border:1.5px dashed var(--border-hi);color:var(--text-3)}
+.empty-icon svg{width:34px;height:34px}
+.empty-text{color:var(--text-2);margin:0 0 14px;font-size:15px}
+.empty-link{background:none;border:none;color:var(--green-bright);font-family:var(--font);font-weight:600;font-size:14px;cursor:pointer}
+.empty-link:hover{text-decoration:underline}
+
+/* ── grid + cards ── */
+.dash-grid{display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:640px){.dash-grid{grid-template-columns:1fr 1fr}}
+.acct-card{position:relative;overflow:hidden;padding:20px 20px 18px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--border);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);transition:transform .3s cubic-bezier(.2,.7,.2,1),border-color .3s,box-shadow .3s;animation:fadeUp .55s cubic-bezier(.16,.84,.3,1) both}
+.acct-card:hover{transform:translateY(-4px);border-color:var(--border-hi);box-shadow:0 20px 44px -18px rgba(0,0,0,.65)}
+#dash-list>*:nth-child(2){animation-delay:.05s}
+#dash-list>*:nth-child(3){animation-delay:.1s}
+#dash-list>*:nth-child(4){animation-delay:.15s}
+#dash-list>*:nth-child(5){animation-delay:.2s}
+#dash-list>*:nth-child(6){animation-delay:.25s}
+#dash-list>*:nth-child(n+7){animation-delay:.3s}
+.acct-glow{position:absolute;top:-45%;right:-18%;width:190px;height:190px;border-radius:50%;background:radial-gradient(circle,rgba(46,232,134,.2),transparent 70%);opacity:0;transition:opacity .4s;pointer-events:none}
+.acct-card:hover .acct-glow{opacity:1}
+.acct-card.is-online .acct-glow{opacity:.45}
+.acct-head{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.acct-name{font-weight:600;font-size:15.5px;color:var(--text)}
+.acct-meta{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text-3)}
+.acct-meta .mono{font-family:var(--mono);font-size:11.5px;letter-spacing:-.02em}
+.acct-status{color:var(--text-2)}
+.acct-actions{display:flex;gap:8px;margin-top:16px}
+
+/* ── status dots ── */
+.dot{position:relative;width:9px;height:9px;border-radius:50%;flex:none}
+.dot-on{background:var(--green-bright);box-shadow:0 0 9px 1px var(--green-glow)}
+.dot-on::after{content:'';position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--green-bright);animation:ripple 2.2s ease-out infinite}
+.dot-off{background:#39404e}
+.dot-pending{background:#f5b942;box-shadow:0 0 9px 0 rgba(245,185,66,.5)}
+.dot-pending::after{content:'';position:absolute;inset:-3px;border-radius:50%;border:1.5px solid #f5b942;animation:ripple 2.4s ease-out infinite}
+
+/* ── badges + small buttons ── */
+.badge{font-size:11px;padding:2px 9px;border-radius:999px;background:rgba(46,232,134,.12);border:1px solid rgba(46,232,134,.3);color:var(--green-bright);font-weight:600;letter-spacing:.02em}
+.btn-sm{font-family:var(--font);font-size:12.5px;padding:7px 14px;border-radius:10px;font-weight:600;cursor:pointer;border:1px solid transparent;transition:.2s}
+.btn-sm-accent{background:linear-gradient(135deg,var(--green-bright),var(--green));color:#06190f;box-shadow:0 5px 16px -6px var(--green-glow)}
+.btn-sm-accent:hover{transform:translateY(-1px);filter:brightness(1.06)}
+.btn-sm-ghost{background:var(--surface);border-color:var(--border);color:var(--text-2)}
+.btn-sm-ghost:hover{background:var(--surface-2);color:var(--text);border-color:var(--border-hi)}
+.btn-sm-danger{background:rgba(255,93,108,.08);border-color:rgba(255,93,108,.25);color:#ff8a95}
+.btn-sm-danger:hover{background:rgba(255,93,108,.16);color:#ffb3ba}
+
+/* ── modal ── */
+.modal-backdrop{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(6,8,12,.62);backdrop-filter:blur(10px) saturate(1.1);-webkit-backdrop-filter:blur(10px) saturate(1.1);animation:fadeIn .35s ease both}
+.modal-card{position:relative;width:100%;max-width:440px;padding:30px;border-radius:24px;background:linear-gradient(180deg,rgba(23,27,35,.97),rgba(14,17,23,.97));border:1px solid var(--border-hi);box-shadow:0 40px 90px -30px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.06);animation:modalIn .45s cubic-bezier(.16,.84,.3,1) both}
+#add-s1,#add-s2,#add-s3{animation:fadeIn .35s ease both}
+.modal-title{margin:0;font-size:18px;font-weight:700;color:var(--text)}
+.modal-sub{margin:6px 0 0;font-size:13.5px;color:var(--text-2)}
+.modal-actions{display:flex;gap:12px;margin-top:4px}
+.modal-actions .btn-primary,.modal-actions .btn-ghost{flex:1;width:auto}
+
+/* ── qr ── */
+.qr-area{display:flex;justify-content:center;margin:22px 0 14px}
+.qr-frame{position:relative;width:232px;height:232px;border-radius:18px;overflow:hidden;background:#fff;border:1px solid var(--border)}
+#qr-img{width:100%;height:100%;object-fit:contain;display:block}
+.qr-scan{position:absolute;left:6%;right:6%;height:2px;top:6%;background:linear-gradient(90deg,transparent,var(--green-bright),transparent);box-shadow:0 0 12px 2px var(--green-glow);animation:scan 2.4s ease-in-out infinite}
+.qr-corner{position:absolute;width:20px;height:20px;border:2px solid var(--green-bright)}
+.qr-corner.tl{top:8px;left:8px;border-right:0;border-bottom:0;border-radius:6px 0 0 0}
+.qr-corner.tr{top:8px;right:8px;border-left:0;border-bottom:0;border-radius:0 6px 0 0}
+.qr-corner.bl{bottom:8px;left:8px;border-right:0;border-top:0;border-radius:0 0 0 6px}
+.qr-corner.br{bottom:8px;right:8px;border-left:0;border-top:0;border-radius:0 0 6px 0}
+.qr-status{font-size:13px;color:var(--text-2);margin-top:2px}
+.qr-countdown{font-family:var(--mono);font-size:12px;color:var(--text-3);margin:6px 0 18px}
+
+/* ── success ── */
+.ok-badge{position:relative;width:78px;height:78px;margin:0 auto;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle,rgba(46,232,134,.22),rgba(46,232,134,.04));border:1px solid rgba(46,232,134,.4);box-shadow:0 0 30px -4px var(--green-glow);animation:pop .5s cubic-bezier(.2,1.4,.4,1) both}
+.ok-badge svg{width:38px;height:38px;color:var(--green-bright)}
+.ok-badge svg path{stroke-dasharray:30;stroke-dashoffset:30;animation:draw .45s ease .28s forwards}
+.ok-badge::after{content:'';position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--green-bright);opacity:0;animation:ripple 1.3s ease-out .2s 2}
+
+.reveal{animation:fadeUp .7s cubic-bezier(.16,.84,.3,1) both}
+
+/* ── keyframes ── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes modalIn{from{opacity:0;transform:translateY(18px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes ripple{0%{transform:scale(.6);opacity:.7}100%{transform:scale(2.4);opacity:0}}
+@keyframes ring{0%,100%{transform:rotate(0)}8%,24%,40%,56%{transform:rotate(13deg)}16%,32%,48%,64%{transform:rotate(-13deg)}72%{transform:rotate(0)}}
+@keyframes scan{0%,100%{top:6%}50%{top:92%}}
+@keyframes pop{0%{transform:scale(0);opacity:0}60%{opacity:1}100%{transform:scale(1);opacity:1}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes drift1{0%,100%{transform:translate(0,0)}50%{transform:translate(6vw,4vw)}}
+@keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-5vw,-4vw)}}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
+</style>
 </head>
-<body class="bg-gray-50 min-h-screen">
+<body>
+<div class="bg-layer"></div>
+<div class="grain"></div>
 
 <!-- Login -->
-<div id="v-login" class="hidden min-h-screen flex items-center justify-center">
-  <div class="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
-    <div class="text-center mb-8">
-      <div class="text-4xl mb-2">🔔</div>
-      <h1 class="text-xl font-bold text-gray-800">叮咚管理台</h1>
+<div id="v-login" class="view-center hidden">
+  <div class="auth-card">
+    <div class="auth-hero">
+      <div class="bell-badge lg">
+        <span class="bell-ring"></span><span class="bell-ring"></span><span class="bell-ring"></span>
+        <svg class="bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </div>
+      <h1 class="auth-title">叮咚管理台</h1>
+      <p class="auth-sub">定时任务管家</p>
     </div>
-    <div>
-      <input id="login-pw" type="password" placeholder="管理密码"
-        class="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition mb-4">
-      <div id="login-err" class="text-red-500 text-sm mb-3 hidden"></div>
-      <button onclick="doLogin()"
-        class="w-full py-3 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition">
-        登 录
-      </button>
-    </div>
+    <input id="login-pw" type="password" placeholder="管理密码" class="field" style="margin-bottom:14px">
+    <div id="login-err" class="form-err hidden"></div>
+    <button onclick="doLogin()" class="btn-primary">登 录</button>
   </div>
 </div>
 
 <!-- Dashboard -->
-<div id="v-dash" class="hidden">
-  <div class="max-w-4xl mx-auto px-4 py-8">
-    <div class="flex items-center justify-between mb-8">
-      <div class="flex items-center gap-3">
-        <span class="text-3xl">🔔</span>
+<div id="v-dash" class="view hidden">
+  <div class="container">
+    <header class="dash-header">
+      <div class="brand reveal" style="animation-delay:.05s">
+        <div class="bell-badge">
+          <svg class="bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </div>
         <div>
-          <h1 class="text-xl font-bold text-gray-800">叮咚管理台</h1>
-          <span id="dash-ver" class="text-xs text-gray-400"></span>
+          <h1 class="brand-title">叮咚管理台</h1>
+          <span id="dash-ver" class="ver-pill"></span>
         </div>
       </div>
-      <button onclick="showAdd()"
-        class="px-5 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition flex items-center gap-2">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      <button onclick="showAdd()" class="btn-cta reveal" style="animation-delay:.12s">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 5v14m7-7H5"/></svg>
         添加助手
       </button>
+    </header>
+
+    <div id="dash-empty" class="hidden empty-state">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </div>
+      <p class="empty-text">还没有叮咚助手</p>
+      <button onclick="showAdd()" class="empty-link">添加第一个</button>
     </div>
 
-    <div id="dash-empty" class="hidden text-center py-16">
-      <div class="text-5xl mb-4">📭</div>
-      <p class="text-gray-400 mb-4">还没有叮咚助手</p>
-      <button onclick="showAdd()" class="text-primary hover:underline">添加第一个</button>
-    </div>
-
-    <div id="dash-list" class="grid gap-4 sm:grid-cols-2"></div>
+    <div id="dash-list" class="dash-grid"></div>
   </div>
 </div>
 
 <!-- Add Modal -->
-<div id="v-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-  <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+<div id="v-modal" class="modal-backdrop hidden">
+  <div class="modal-card">
     <!-- Step 1: Label -->
     <div id="add-s1">
-      <h2 class="text-lg font-bold mb-4">添加叮咚助手</h2>
-      <input id="add-label" type="text" placeholder="给助手起个名字（如：小明的叮咚）"
-        class="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition mb-4">
-      <div class="flex gap-3">
-        <button onclick="hideModal()" class="flex-1 py-2.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition">取消</button>
-        <button onclick="doCreate()" id="add-btn" class="flex-1 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition">下一步</button>
+      <h2 class="modal-title">添加叮咚助手</h2>
+      <p class="modal-sub">先给助手起个名字</p>
+      <input id="add-label" type="text" placeholder="如：小明的叮咚" class="field" style="margin:18px 0 20px">
+      <div class="modal-actions">
+        <button onclick="hideModal()" class="btn-ghost">取消</button>
+        <button onclick="doCreate()" id="add-btn" class="btn-primary">下一步</button>
       </div>
     </div>
     <!-- Step 2: QR -->
-    <div id="add-s2" class="hidden text-center">
-      <h2 class="text-lg font-bold mb-2">扫码绑定</h2>
-      <p class="text-sm text-gray-500 mb-4">请用微信扫一扫（首页右上角 +）</p>
-      <div id="qr-area" class="flex justify-center mb-4">
-        <img id="qr-img" class="w-56 h-56 rounded-lg border" src="" alt="QR">
+    <div id="add-s2" class="hidden" style="text-align:center">
+      <h2 class="modal-title">扫码绑定</h2>
+      <p class="modal-sub">请用微信扫一扫（首页右上角 +）</p>
+      <div id="qr-area" class="qr-area">
+        <div class="qr-frame">
+          <img id="qr-img" src="" alt="QR">
+          <span class="qr-scan"></span>
+          <i class="qr-corner tl"></i><i class="qr-corner tr"></i><i class="qr-corner bl"></i><i class="qr-corner br"></i>
+        </div>
       </div>
-      <div id="qr-status" class="text-sm text-gray-400 mb-4">等待扫码...</div>
-      <button onclick="cancelAdd()" class="px-6 py-2 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition">取消</button>
+      <div id="qr-status" class="qr-status">等待扫码...</div>
+      <div id="qr-countdown" class="qr-countdown"></div>
+      <button onclick="cancelAdd()" class="btn-ghost" style="width:auto;padding:10px 28px;margin:0 auto">取消</button>
     </div>
     <!-- Step 3: Done -->
-    <div id="add-s3" class="hidden text-center py-4">
-      <div class="text-5xl mb-3">✅</div>
-      <h2 class="text-lg font-bold mb-2">绑定成功</h2>
-      <p class="text-sm text-gray-500 mb-4">助手已上线，现在可以在微信中使用了</p>
-      <button onclick="hideModal();loadAccounts()" class="px-6 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-blue-600 transition">完成</button>
+    <div id="add-s3" class="hidden" style="text-align:center;padding:8px 0">
+      <div class="ok-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+      </div>
+      <h2 class="modal-title" style="margin-top:16px">绑定成功</h2>
+      <p class="modal-sub">助手已上线，现在可以在微信中使用了</p>
+      <button onclick="hideModal();loadAccounts()" class="btn-primary" style="margin-top:22px">完成</button>
     </div>
   </div>
 </div>
@@ -94,6 +287,9 @@ const API = '';
 let token = localStorage.getItem('dd_token') || '';
 let currentAddId = null;
 let pollTimer = null;
+let countdownTimer = null;
+let countdownSec = 0;
+const QR_TIMEOUT = 300;
 
 function api(method, path, body) {
   const h = {'Content-Type':'application/json'};
@@ -103,12 +299,9 @@ function api(method, path, body) {
 }
 
 async function init() {
-  const r = await api('GET', '/api/auth-status');
-  if (r.data.requires_auth) {
-    if (!token) { show('v-login'); return; }
-    const t = await api('GET', '/api/accounts');
-    if (t.status === 401) { token=''; localStorage.removeItem('dd_token'); show('v-login'); return; }
-  }
+  if (!token) { show('v-login'); return; }
+  const t = await api('GET', '/api/accounts');
+  if (t.status === 401) { token=''; localStorage.removeItem('dd_token'); show('v-login'); return; }
   show('v-dash');
   loadAccounts();
   loadStatus();
@@ -156,26 +349,28 @@ function esc(s) {
 }
 
 function accountCard(a) {
-  const dot = a.online ? 'bg-wx' : 'bg-gray-300';
+  let dotCls = 'dot-off';
+  if (a.online) dotCls = 'dot-on';
+  else if (a.status === 'pending_login') dotCls = 'dot-pending';
   const statusText = a.online ? '在线' : (a.status === 'pending_login' ? '待扫码' : '离线');
   const label = esc(a.label || '未命名');
-  const admin = a.is_admin ? '<span class="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">管理员</span>' : '';
+  const admin = a.is_admin ? '<span class="badge">管理员</span>' : '';
+  const primaryBtn = a.status === 'pending_login'
+    ? `<button onclick="startLogin('${esc(a.id)}')" class="btn-sm btn-sm-accent">扫码绑定</button>`
+    : `<button onclick="relogin('${esc(a.id)}')" class="btn-sm btn-sm-ghost">重新登录</button>`;
+  const delBtn = !a.is_admin
+    ? `<button onclick="removeAccount('${esc(a.id)}','${label}')" class="btn-sm btn-sm-danger">删除</button>`
+    : '';
   return `
-  <div class="bg-white rounded-xl border border-gray-100 p-5 shadow-sm hover:shadow-md transition">
-    <div class="flex items-start justify-between mb-3">
-      <div>
-        <div class="flex items-center gap-2 mb-1">
-          <span class="w-2.5 h-2.5 rounded-full ${dot}"></span>
-          <span class="font-medium text-gray-800">${label}</span>
-          ${admin}
-        </div>
-        <div class="text-xs text-gray-400">${esc(a.id)} · ${statusText}</div>
-      </div>
+  <div class="acct-card${a.online ? ' is-online' : ''}">
+    <span class="acct-glow"></span>
+    <div class="acct-head">
+      <span class="dot ${dotCls}"></span>
+      <span class="acct-name">${label}</span>
+      ${admin}
     </div>
-    <div class="flex gap-2 mt-3">
-      ${a.status === 'pending_login' ? `<button onclick="startLogin('${esc(a.id)}')" class="text-xs px-3 py-1.5 bg-wx text-white rounded-lg hover:bg-green-600 transition">扫码绑定</button>` : `<button onclick="relogin('${esc(a.id)}')" class="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition">重新登录</button>`}
-      ${!a.is_admin ? `<button onclick="removeAccount('${esc(a.id)}','${label}')" class="text-xs px-3 py-1.5 border border-red-200 rounded-lg text-red-500 hover:bg-red-50 transition">删除</button>` : ''}
-    </div>
+    <div class="acct-meta"><span class="mono">${esc(a.id)}</span><span>·</span><span class="acct-status">${statusText}</span></div>
+    <div class="acct-actions">${primaryBtn}${delBtn}</div>
   </div>`;
 }
 
@@ -195,7 +390,25 @@ function showAdd() {
 function hideModal() {
   document.getElementById('v-modal').classList.add('hidden');
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   currentAddId = null;
+}
+
+function startCountdown() {
+  countdownSec = QR_TIMEOUT;
+  const el = document.getElementById('qr-countdown');
+  const tick = () => {
+    const m = Math.floor(countdownSec / 60);
+    const s = countdownSec % 60;
+    el.textContent = `${m}:${s.toString().padStart(2,'0')} 后过期`;
+    if (countdownSec <= 0) {
+      clearInterval(countdownTimer); countdownTimer = null;
+      el.textContent = '已过期';
+    }
+    countdownSec--;
+  };
+  tick();
+  countdownTimer = setInterval(tick, 1000);
 }
 
 async function doCreate() {
@@ -223,6 +436,7 @@ async function startLogin(accountId) {
   if (r.data.qr_url) {
     document.getElementById('qr-img').src = '/api/accounts/' + accountId + '/qrcode.png?' + Date.now();
     document.getElementById('qr-status').textContent = '等待扫码...';
+    startCountdown();
     pollTimer = setInterval(() => pollQr(accountId), 2000);
   } else {
     document.getElementById('qr-status').textContent = r.data.error || '生成失败';
