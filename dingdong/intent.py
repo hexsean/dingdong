@@ -103,9 +103,12 @@ CHECK_UPDATE_KEYWORDS = {"检查更新", "检查版本", "版本", "当前版本
 DELETE_ALL_CONFIRM_KEYWORDS = {"确认删除全部", "确认删除所有任务", "确认全部删除"}
 DELETE_ALL_CANCEL_KEYWORDS = {"取消", "取消删除", "不用", "不删了", "no", "n"}
 
-INTENT_SYSTEM_PROMPT = """\
-你是叮咚，微信定时任务助手。说话像微信里的朋友：自然、口语、简短，别像机器人念说明书。
+# 三项长期偏好的系统默认值（占位）：用户未设定时用这些，用户设定后用用户的。
+DEFAULT_BOT_NAME = "叮咚"
+DEFAULT_PERSONA = "像微信里的朋友：自然、口语、简短，别像机器人念说明书。"
+# user_title 默认无（空）——系统不预设你该怎么称呼用户。
 
+INTENT_SYSTEM_PROMPT = """\
 表达：
 - 默认简短，能一句说清就一句，不废话。
 - 需要多说几句时（介绍自己、解释你能做啥、给建议），拆成几条短消息，用单独一行 [下一条] 分隔，别堆成一大段。
@@ -120,6 +123,8 @@ INTENT_SYSTEM_PROMPT = """\
 - 不要自作主张创建用户没要求的任务
 - 创建/修改/删除任务，确认一句话就够
 - 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
+
+长期偏好（称呼与风格）：当用户表达"想怎么称呼你 / 给你起个名"、"希望你怎么称呼TA"、"希望你是什么性格/风格/语气"时，调用 set_profile 记住。只传发生变化的项（会整项覆盖），其余不传保持不变；要恢复默认就把该项设为空字符串。除非用户提起，别主动反复追问这些。
 
 用户问你能做什么，可以热情点、分几条说（用 [下一条]）：你能帮他定各种定时提醒和任务，到点用微信戳他；顺带提一句发「我有哪些任务」看列表、「清空对话」重置记录。
 
@@ -240,6 +245,21 @@ TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
     ),
+    ToolSpec(
+        name="set_profile",
+        description="记住用户的长期偏好（称呼与风格）。当用户表达想怎么称呼你/给你起名、希望你怎么称呼他、"
+                    "或希望你是什么性格/风格/语气时调用。只传发生变化的字段，会整项覆盖；其余不传保持不变。"
+                    "用户要求恢复默认时，把对应字段传空字符串。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "bot_name": {"type": "string", "description": "用户希望怎么称呼你/给你起的名字"},
+                "user_title": {"type": "string", "description": "你应当怎么称呼用户"},
+                "persona": {"type": "string", "description": "用户希望你的性格/风格/语气"},
+            },
+            "additionalProperties": False,
+        },
+    ),
 ]
 
 SEARCH_TOOL_SPECS = [
@@ -317,6 +337,9 @@ class IntentRouter:
                image_bytes_list: list[bytes] | None = None) -> str:
         stripped = text.strip()
         has_images = bool(image_bytes_list)
+        # 是否首次对话（用于初次顺带问一下称呼，之后静默）。须在写入本条消息前判断。
+        is_first = not self._store.get_history(
+            owner_user_id, limit=1, account_id=self._account_id or None)
 
         if not has_images:
             if owner_user_id in self._pending_update:
@@ -348,9 +371,14 @@ class IntentRouter:
                 self._pending_clear.add(owner_user_id)
                 return "要把咱俩的聊天记录都清掉吗？回个「确认」我就清。"
             if stripped.lower() in GREETING_KEYWORDS:
+                reply = GREETING_REPLY
+                if is_first:
+                    prefs = self._store.get_prefs(owner_user_id, account_id=self._account_id)
+                    if not prefs["bot_name"] and not prefs["user_title"]:
+                        reply += BUBBLE_SEP + "对了，想让我怎么称呼你？也可以给我起个名字～"
                 self._store.append_message(owner_user_id, "user", text, account_id=self._account_id)
-                self._store.append_message(owner_user_id, "assistant", GREETING_REPLY, account_id=self._account_id)
-                return GREETING_REPLY
+                self._store.append_message(owner_user_id, "assistant", reply, account_id=self._account_id)
+                return reply
             if stripped == "关闭更新提醒":
                 if not self._is_admin:
                     return "这个操作只有管理员能用哦。"
@@ -419,7 +447,7 @@ class IntentRouter:
             if search_available():
                 tools.extend(SEARCH_TOOL_SPECS)
             resp = self._llm.chat(
-                system=self._system_prompt(),
+                system=self._system_prompt(owner_user_id, is_first),
                 messages=messages,
                 tools=tools,
                 max_tokens=RESPONSE_TOKEN_BUDGET,
@@ -484,7 +512,7 @@ class IntentRouter:
         if search_available():
             tools.extend(SEARCH_TOOL_SPECS)
 
-        system_tokens = _estimate_tokens(self._system_prompt())
+        system_tokens = _estimate_tokens(self._system_prompt(owner_user_id))
         tool_tokens = _estimate_tool_spec_tokens(tools) + TOOL_OVERHEAD_TOKENS
         overhead = system_tokens + tool_tokens + RESPONSE_TOKEN_BUDGET + TOOL_ROUND_RESERVE
         available = max(0, self._context_length - overhead)
@@ -502,10 +530,25 @@ class IntentRouter:
 
         return history
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, owner_user_id: str, is_first: bool = False) -> str:
+        prefs = self._store.get_prefs(owner_user_id, account_id=self._account_id)
+        bot_name = prefs["bot_name"] or DEFAULT_BOT_NAME
+        persona = prefs["persona"] or DEFAULT_PERSONA
+        user_title = prefs["user_title"]
+
+        header = [f"你是{bot_name}，微信定时任务助手。", f"性格与风格：{persona}"]
+        if user_title:
+            header.append(f"称呼用户时用「{user_title}」。")
+        if is_first and not prefs["bot_name"] and not prefs["user_title"]:
+            header.append(
+                "这看起来是你们第一次聊：可以自然地顺带问一句对方想怎么称呼你、希望你怎么称呼 TA。"
+                "问过一次就好，之后别再追问。"
+            )
+
         now = datetime.now(self._tz())
         weekday = "星期" + "一二三四五六日"[now.weekday()]
-        return INTENT_SYSTEM_PROMPT + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}\n"
+        return ("\n".join(header) + "\n\n" + INTENT_SYSTEM_PROMPT
+                + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}\n")
 
     # ---------- vision ----------
 
@@ -665,6 +708,8 @@ class IntentRouter:
                 return self._tool_set_enabled(args, owner_user_id)
             if name == "run_now":
                 return self._tool_run_now(args, owner_user_id)
+            if name == "set_profile":
+                return self._tool_set_profile(args, owner_user_id)
             if name == "search_web":
                 return self._tool_search_web(args)
             if name == "read_url":
@@ -801,6 +846,13 @@ class IntentRouter:
             return _err("没找到这个任务诶，发「我有哪些任务」看看？")
         self._scheduler.trigger_now(job)
         return _ok({"queued_id": job.id, "queued_name": job.name})
+
+    def _tool_set_profile(self, args: dict[str, Any], owner_user_id: str) -> str:
+        fields = {k: args[k] for k in ("bot_name", "user_title", "persona") if k in args}
+        if not fields:
+            return _err("没有要更新的偏好")
+        prefs = self._store.set_prefs(owner_user_id, account_id=self._account_id, **fields)
+        return _ok({"profile": prefs, "changed": list(fields.keys())})
 
     def _tool_search_web(self, args: dict[str, Any]) -> str:
         query = str(args.get("query", "")).strip()

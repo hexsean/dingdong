@@ -54,6 +54,16 @@ CREATE TABLE IF NOT EXISTS chat_history (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_history(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_account ON chat_history(account_id, owner_user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS user_prefs (
+    account_id    TEXT NOT NULL DEFAULT '',
+    owner_user_id TEXT NOT NULL,
+    bot_name      TEXT NOT NULL DEFAULT '',
+    user_title    TEXT NOT NULL DEFAULT '',
+    persona       TEXT NOT NULL DEFAULT '',
+    updated_at    INTEGER NOT NULL,
+    PRIMARY KEY (account_id, owner_user_id)
+);
 """
 
 VALID_SCHEDULE_KINDS = {"cron", "interval", "date"}
@@ -243,6 +253,7 @@ class JobStore:
                 cur = self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
                 self._conn.execute("DELETE FROM jobs WHERE account_id = ?", (account_id,))
                 self._conn.execute("DELETE FROM chat_history WHERE account_id = ?", (account_id,))
+                self._conn.execute("DELETE FROM user_prefs WHERE account_id = ?", (account_id,))
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
@@ -424,3 +435,39 @@ class JobStore:
                     "DELETE FROM chat_history WHERE owner_user_id = ?", (owner_user_id,)
                 )
         return cur.rowcount
+
+    # ── user prefs (long-term: 称呼 / 风格) ──────────────────────
+
+    PREF_FIELDS = ("bot_name", "user_title", "persona")
+
+    def get_prefs(self, owner_user_id: str, account_id: str = "") -> dict[str, str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT bot_name, user_title, persona FROM user_prefs "
+                "WHERE account_id = ? AND owner_user_id = ?",
+                (account_id, owner_user_id),
+            ).fetchone()
+        if not row:
+            return {k: "" for k in self.PREF_FIELDS}
+        return {k: row[k] for k in self.PREF_FIELDS}
+
+    def set_prefs(self, owner_user_id: str, account_id: str = "", **fields: str) -> dict[str, str]:
+        """全量覆盖传入的字段（空串=恢复默认/清空），未传的保持不变。返回更新后的全部偏好。"""
+        clean = {k: ("" if v is None else str(v)).strip()
+                 for k, v in fields.items() if k in self.PREF_FIELDS}
+        if not clean:
+            return self.get_prefs(owner_user_id, account_id)
+        now = int(time.time())
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO user_prefs (account_id, owner_user_id, updated_at) "
+                "VALUES (?,?,?)",
+                (account_id, owner_user_id, now),
+            )
+            sets = ", ".join(f"{k} = ?" for k in clean)
+            self._conn.execute(
+                f"UPDATE user_prefs SET {sets}, updated_at = ? "
+                "WHERE account_id = ? AND owner_user_id = ?",
+                (*clean.values(), now, account_id, owner_user_id),
+            )
+        return self.get_prefs(owner_user_id, account_id)
