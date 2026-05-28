@@ -12,7 +12,7 @@ git clone https://github.com/hexsean/dingdong.git && cd dingdong && docker compo
 
 ## 模型渠道
 
-配置向导内置 Anthropic、OpenAI 以及多种 OpenAI 兼容渠道。MiMo Token Plan 订阅用户可在 `setup` 中选择「MiMo Token Plan（官方订阅）」，填入 `tp-` 开头的订阅 API Key，并按需保留或替换专属 Base URL。
+配置向导内置 Anthropic、OpenAI 以及多种 OpenAI 兼容渠道。MiMo Token Plan 订阅用户可在 `setup` 中选择「MiMo Token Plan（官方订阅）」，填入 `tp-` 开头的订阅 API Key，并按需保留或替换专属 Base URL。默认文本模型为 `mimo-v2.5-pro`；如需独立图片理解模型，可选择 MiMo 并使用官方多模态模型 `mimo-v2.5`。
 
 ## 微信入口
 

@@ -259,7 +259,7 @@ class Bot:
         first_run = datetime.now(tz) + timedelta(seconds=30)
         self._scheduler._scheduler.add_job(
             self._check_update,
-            trigger=IntervalTrigger(minutes=1, timezone=tz),
+            trigger=IntervalTrigger(minutes=5, timezone=tz),
             id=CHECK_ID,
             replace_existing=True,
             next_run_time=first_run,

@@ -22,6 +22,10 @@ from typing import Any, Protocol
 log = logging.getLogger(__name__)
 
 
+def _is_xiaomi_mimo_base_url(base_url: str) -> bool:
+    return "xiaomimimo.com" in base_url.lower()
+
+
 @dataclass
 class ToolSpec:
     name: str
@@ -112,7 +116,11 @@ class OpenAIProvider:
         from openai import OpenAI  # type: ignore
         if not api_key:
             raise ValueError("OPENAI_API_KEY is empty")
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._is_xiaomi_mimo = _is_xiaomi_mimo_base_url(base_url)
+        client_kwargs: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
+        if self._is_xiaomi_mimo:
+            client_kwargs["default_headers"] = {"api-key": api_key}
+        self._client = OpenAI(**client_kwargs)
         self._model = model
         self._is_deepseek = "deepseek" in base_url.lower()
 
@@ -195,8 +203,11 @@ class OpenAIProvider:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": self._to_openai_messages(system, messages),
-            "max_tokens": max_tokens,
         }
+        if self._is_xiaomi_mimo:
+            kwargs["extra_body"] = {"max_completion_tokens": max_tokens}
+        else:
+            kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = [
                 {
@@ -210,7 +221,7 @@ class OpenAIProvider:
                 for t in tools
             ]
         if self._is_deepseek:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+            kwargs.setdefault("extra_body", {})["thinking"] = {"type": "enabled"}
             kwargs["reasoning_effort"] = "low"
         resp = self._client.chat.completions.create(**kwargs)
         choice = resp.choices[0]

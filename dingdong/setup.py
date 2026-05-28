@@ -20,7 +20,7 @@ PROVIDERS = [
     # --- OpenAI 兼容渠道 ---
     {"key": "mimo-plan",  "name": "MiMo Token Plan（官方订阅）", "type": "openai",
      "base_url": "https://token-plan-cn.xiaomimimo.com/v1", "model": "mimo-v2.5-pro",
-     "ask_base_url": True},
+     "ask_base_url": True, "vision_model": "mimo-v2.5"},
     {"key": "deepseek",   "name": "DeepSeek",           "type": "openai",
      "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
     {"key": "openrouter", "name": "OpenRouter",         "type": "openai",
@@ -63,6 +63,10 @@ def _mask(val: str) -> str:
 
 def _is_enabled(value: str) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _is_xiaomi_mimo_base_url(base_url: str) -> bool:
+    return "xiaomimimo.com" in base_url.lower()
 
 
 def _ask_secret(prompt: str, current: str = "") -> str:
@@ -111,8 +115,17 @@ def _test_model(provider_type: str, api_key: str, model: str, base_url: str = ""
             client.messages.create(model=model, max_tokens=16, messages=messages)
         else:
             from openai import OpenAI
-            client = OpenAI(api_key=api_key, base_url=base_url or "https://api.openai.com/v1")
-            client.chat.completions.create(model=model, max_tokens=16, messages=messages)
+            is_mimo = _is_xiaomi_mimo_base_url(base_url)
+            client_kwargs = {"api_key": api_key, "base_url": base_url or "https://api.openai.com/v1"}
+            if is_mimo:
+                client_kwargs["default_headers"] = {"api-key": api_key}
+            client = OpenAI(**client_kwargs)
+            request_kwargs = {"model": model, "messages": messages}
+            if is_mimo:
+                request_kwargs["extra_body"] = {"max_completion_tokens": 16}
+            else:
+                request_kwargs["max_tokens"] = 16
+            client.chat.completions.create(**request_kwargs)
         print("✓ 通过")
         return True, ""
     except Exception as exc:
@@ -130,6 +143,8 @@ def _classify_error(exc: Exception) -> str:
         return "API Key 无效或已过期"
     if code == 403 or "permission" in msg.lower():
         return "无权限访问该模型"
+    if "not supported model" in msg.lower():
+        return "模型不存在或当前订阅不支持；MiMo 模型名需使用小写，如 mimo-v2.5-pro"
     if code == 404 or "not found" in msg.lower() or "does not exist" in msg.lower():
         return f"模型不存在，请检查模型名称"
     if "image" in msg.lower() and ("format" in msg.lower() or "decode" in msg.lower()):
@@ -183,7 +198,7 @@ def _matches_provider_base_url(provider: dict, base_url: str) -> bool:
     if provider_base_url and normalized == provider_base_url:
         return True
     if provider.get("key") == "mimo-plan":
-        return "token-plan-cn.xiaomimimo.com" in normalized
+        return "token-plan-" in normalized and _is_xiaomi_mimo_base_url(normalized)
     return False
 
 
@@ -414,16 +429,17 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
     while True:
         env["VISION_PROVIDER"] = vp["type"]
         env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
+        vision_default = vp.get("vision_model", vp["model"])
         if vp["key"] == "custom":
             env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
             env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
         elif vp.get("ask_base_url"):
             env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", vp["base_url"]))
-            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
+            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vision_default))
         else:
             if vp["base_url"]:
                 env["VISION_BASE_URL"] = vp["base_url"]
-            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vp["model"]))
+            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vision_default))
 
         ok, _ = _test_model(
             vp["type"], env["VISION_API_KEY"],
