@@ -18,6 +18,7 @@ from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
 from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
 from .self_update import (
+    WECHAT_UPDATE_DISABLED_HINT,
     read_update_result,
     trigger_watchtower_update,
     update_configured,
@@ -31,11 +32,13 @@ MAX_TOOL_ROUNDS = 6
 
 CLEAR_KEYWORDS = {"清空对话", "新对话", "重置对话", "清除历史"}
 GREETING_KEYWORDS = {"你好", "hi", "hello", "hey", "嗨", "在吗", "在不在", "你在吗"}
-GREETING_REPLY = "在的，有什么需要帮忙的？"
+GREETING_REPLY = "在的。可以直接说：「每天 9 点提醒我喝水」「我有哪些任务」「检查更新」。"
 UPDATE_KEYWORDS = {"更新叮咚", "升级叮咚", "立即更新", "开始更新"}
 UPDATE_STATUS_KEYWORDS = {"更新状态", "查看更新状态"}
 UPDATE_CONFIRM_KEYWORDS = {"确认更新", "确认升级"}
 CHECK_UPDATE_KEYWORDS = {"检查更新", "检查版本", "版本", "当前版本"}
+DELETE_ALL_CONFIRM_KEYWORDS = {"确认删除全部", "确认删除所有任务", "确认全部删除"}
+DELETE_ALL_CANCEL_KEYWORDS = {"取消", "取消删除", "不用", "不删了", "no", "n"}
 
 INTENT_SYSTEM_PROMPT = """\
 你是叮咚，微信定时任务助手。极简回复，不废话。
@@ -196,7 +199,7 @@ def _tool_status(name: str, args: dict[str, Any]) -> str | None:
 
 
 CONFIRM_KEYWORDS = {"确认", "确定", "是", "yes", "y"}
-CANCEL_KEYWORDS = {"取消", "不用", "不更新", "先不更新", "no", "n"}
+CANCEL_KEYWORDS = {"取消", "取消更新", "不用", "不更新", "先不更新", "no", "n"}
 
 
 class IntentRouter:
@@ -216,6 +219,7 @@ class IntentRouter:
         self._on_update_progress = None
         self._pending_clear: set[str] = set()
         self._pending_update: dict[str, str] = {}
+        self._pending_delete_all: set[str] = set()
         self._model_info = model_info or ModelInfo(model_id="")
         self._vision_supported = self._model_info.supports_vision
         self._wechat_update_enabled = wechat_update_enabled
@@ -233,14 +237,24 @@ class IntentRouter:
 
         if not has_images:
             if owner_user_id in self._pending_update:
-                if stripped in UPDATE_CONFIRM_KEYWORDS or stripped.lower() in CONFIRM_KEYWORDS:
+                if stripped in UPDATE_CONFIRM_KEYWORDS:
                     latest = self._pending_update.pop(owner_user_id)
                     return self._start_update(owner_user_id, context_token, latest)
                 if stripped in CANCEL_KEYWORDS or stripped.lower() in CANCEL_KEYWORDS:
                     self._pending_update.pop(owner_user_id, None)
                     return "已取消更新。"
+                if stripped.lower() in CONFIRM_KEYWORDS:
+                    return "为避免误操作，请回复「确认更新」开始；回复「取消更新」放弃。"
                 if stripped not in CHECK_UPDATE_KEYWORDS and stripped not in UPDATE_KEYWORDS and stripped not in UPDATE_STATUS_KEYWORDS:
                     self._pending_update.pop(owner_user_id, None)
+            if owner_user_id in self._pending_delete_all:
+                self._pending_delete_all.discard(owner_user_id)
+                if stripped in DELETE_ALL_CONFIRM_KEYWORDS:
+                    result = self._tool_delete_job({"job_id": "all", "confirm": "yes"}, owner_user_id)
+                    return _quick_reply("delete_job", result) or "已删除全部任务。"
+                if stripped in DELETE_ALL_CANCEL_KEYWORDS or stripped.lower() in DELETE_ALL_CANCEL_KEYWORDS:
+                    return "已取消删除全部任务。"
+                return "已取消删除全部任务。"
             if owner_user_id in self._pending_clear:
                 self._pending_clear.discard(owner_user_id)
                 if stripped.lower() in CONFIRM_KEYWORDS:
@@ -416,9 +430,9 @@ class IntentRouter:
         lines = [f"当前版本 v{lv}，最新版本 v{rv}。"]
         if self._can_wechat_update():
             self._pending_update[owner_user_id] = rv
-            lines.append("回复「确认更新」执行。")
+            lines.append("为避免误操作，请回复「确认更新」开始；回复「取消更新」放弃。")
         else:
-            lines.append("微信更新未开启。")
+            lines.append(WECHAT_UPDATE_DISABLED_HINT)
         return "\n".join(lines)
 
     def _confirm_update(self, owner_user_id: str, context_token: str) -> str:
@@ -432,7 +446,7 @@ class IntentRouter:
 
     def _prepare_update(self, owner_user_id: str) -> str:
         if not self._can_wechat_update():
-            return "微信更新未开启。"
+            return WECHAT_UPDATE_DISABLED_HINT
         lv = local_version()
         rv = remote_version()
         if rv is None:
@@ -440,11 +454,11 @@ class IntentRouter:
         if not is_newer_version(rv, lv):
             return f"当前版本 v{lv}，已是最新。"
         self._pending_update[owner_user_id] = rv
-        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n回复「确认更新」执行。"
+        return f"将从 v{lv} 更新到 v{rv}，期间会短暂重启。\n为避免误操作，请回复「确认更新」开始；回复「取消更新」放弃。"
 
     def _start_update(self, owner_user_id: str, context_token: str, latest: str) -> str:
         if not self._can_wechat_update():
-            return "微信更新未开启。"
+            return WECHAT_UPDATE_DISABLED_HINT
 
         def notify(text: str) -> None:
             if self._on_update_progress:
@@ -496,7 +510,7 @@ class IntentRouter:
         if status == "done":
             return f"正在更新到 v{version}..."
         if status == "pending":
-            return f"更新仍未完成：v{version}。可再发「确认更新」重试。"
+            return f"更新仍在等待生效：v{version}。请稍后再发「更新状态」查看；如果 10 分钟后仍未完成，再发「确认更新」重试。"
         if status == "failed":
             return f"更新失败：{message or '请稍后再试'}。"
         return f"更新状态：{status} {message}".strip()
@@ -539,7 +553,7 @@ class IntentRouter:
     def _tool_list_jobs(self, owner_user_id: str) -> str:
         jobs = self._store.list_jobs(owner_user_id=owner_user_id)
         if not jobs:
-            return _ok({"jobs": []}, note="没有任务")
+            return _ok({"jobs": []}, note="还没有任务。试试：「每天 9 点提醒我喝水」。")
         briefs = []
         for j in jobs:
             b = _job_to_brief(j)
@@ -613,6 +627,12 @@ class IntentRouter:
     def _tool_delete_job(self, args: dict[str, Any], owner_user_id: str) -> str:
         ids = args.get("job_ids") or []
         single = args.get("job_id", "")
+        if (single == "all" or not ids) and args.get("confirm") != "yes":
+            jobs = self._store.list_jobs(owner_user_id=owner_user_id)
+            if not jobs:
+                return _ok({"deleted_count": 0}, note="没有任务可删")
+            self._pending_delete_all.add(owner_user_id)
+            return _err(f"将删除全部 {len(jobs)} 个任务。请回复「确认删除全部」执行，或回复「取消」放弃。")
         if single:
             ids = [single] if single != "all" else []
 
@@ -709,7 +729,10 @@ def _quick_reply(tool_name: str, result_json: str) -> str | None:
     if tool_name == "run_now":
         return f"已触发「{r.get('queued_name', '')}」。"
 
-    # list_jobs / get_current_time 是只读查询，可能是多步操作的前置步骤，不拦截
+    if tool_name == "list_jobs" and not r.get("jobs"):
+        return r.get("note") or "还没有任务。试试：「每天 9 点提醒我喝水」。"
+
+    # 非空 list_jobs / get_current_time 是只读查询，可能是多步操作的前置步骤，不拦截
 
     return None
 

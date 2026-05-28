@@ -8,6 +8,13 @@ from typing import Callable
 UPDATE_RESULT = ".update-result"
 DEFAULT_WATCHTOWER_URL = "http://watchtower:8080/v1/update"
 WATCHTOWER_RETRY_DELAYS_SECONDS = (20, 40, 60, 90, 120, 180, 240, 300)
+WECHAT_UPDATE_DISABLED_HINT = (
+    "微信内更新未开启，无法在微信里执行更新。\n"
+    "如需手动更新，请在服务器运行：\n"
+    "docker compose pull && docker compose up -d\n"
+    "如需开启微信内更新，请运行：\n"
+    "docker compose run --rm dingdong setup"
+)
 
 log = logging.getLogger(__name__)
 
@@ -125,8 +132,12 @@ def trigger_watchtower_update(
                     return
                 if attempt < len(delays):
                     continue
-                write_update_result(data_dir, status="pending", target_version=target_version, message="仍未完成")
-                _notify_progress(notify, f"更新仍未完成：v{target_version}。可再发「确认更新」重试。")
+                write_update_result(data_dir, status="pending", target_version=target_version, message="等待更新生效")
+                _notify_progress(
+                    notify,
+                    f"更新仍在等待生效：v{target_version}。\n"
+                    "请稍后发「更新状态」查看；如果 10 分钟后仍未完成，再发「确认更新」重试。",
+                )
                 return
             if resp.status_code in (401, 403):
                 write_update_result(data_dir, status="failed", target_version=target_version, message="更新令牌无效")

@@ -26,7 +26,12 @@ from .models import fetch_model_info
 from .restart import RESTART_CHECK_INTERVAL_SECONDS, restart_marker_signature
 from .scheduler import Scheduler
 from .search import init_exa
-from .self_update import read_update_result, update_configured, write_update_result
+from .self_update import (
+    WECHAT_UPDATE_DISABLED_HINT,
+    read_update_result,
+    update_configured,
+    write_update_result,
+)
 from .storage import JobStore
 from .updater import CHECK_ID, is_disabled, is_newer_version, local_version, remote_version
 
@@ -134,13 +139,22 @@ class Bot:
             return
 
         image_bytes_list: list[bytes] = []
+        failed_images = 0
         for img in images:
             try:
                 data = self._client.download_image(img)
                 image_bytes_list.append(data)
                 log.info("downloaded image (%d bytes) from %s", len(data), owner)
             except Exception:
+                failed_images += 1
                 log.exception("image download failed")
+
+        if images and not image_bytes_list:
+            self._client.safe_send_text(owner, "图片下载失败了，请重新发送一次。", ctx)
+            return
+        image_note = ""
+        if failed_images:
+            image_note = f"有 {failed_images} 张图片没读到，我先处理已收到的图片。\n"
 
         log.info("inbound from %s: %s (images: %d)", owner, text[:120], len(image_bytes_list))
         typing_stop = self._start_typing_loop(owner, ctx)
@@ -154,8 +168,14 @@ class Bot:
         except Exception as exc:
             log.exception("intent handling failed")
             err_msg = str(exc)[:100]
-            reply = f"出错了：{err_msg}" if log.isEnabledFor(logging.DEBUG) else "出错了，请稍后重试。"
+            reply = (
+                f"处理失败，我没有执行任何任务变更：{err_msg}"
+                if log.isEnabledFor(logging.DEBUG)
+                else "处理失败，我没有执行任何任务变更。请重试一次；若连续失败，请发「清空对话」重置上下文，或让管理员查看日志。"
+            )
         typing_stop.set()
+        if image_note and reply:
+            reply = image_note + reply
         if reply:
             log.info("reply (%d chars): %s", len(reply), reply[:200])
             ok = self._client.safe_send_text(owner, reply, ctx)
@@ -260,7 +280,7 @@ class Bot:
     def _notify_update(self, current: str, latest: str) -> bool:
         update_action = "回复「确认更新」执行，期间会短暂重启。"
         if not update_configured(self._cfg.wechat_update_enabled, self._cfg.watchtower_token):
-            update_action = "微信内更新未开启，请在服务器手动更新。"
+            update_action = WECHAT_UPDATE_DISABLED_HINT
         msg = (
             f"🔔 叮咚有新版本 v{latest}（当前 v{current}）\n"
             f"{update_action}\n"

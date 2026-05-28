@@ -281,8 +281,10 @@ def run_setup(data_dir: str = "./data") -> None:
             ok, _ = _test_model("openai", env["OPENAI_API_KEY"], env["OPENAI_MODEL"], env.get("OPENAI_BASE_URL", ""))
         if ok:
             break
-        retry = _ask("重新输入？(Y/n)", "Y")
+        print("  继续保存后，机器人可能无法正常回复。")
+        retry = _ask("是否重新输入？(Y/n)", "Y")
         if retry.lower() in ("n", "no"):
+            print("  已保存未通过测试的模型配置；请修正后再启动服务。")
             break
     print()
 
@@ -306,6 +308,7 @@ def run_setup(data_dir: str = "./data") -> None:
         if ok:
             action = _ask("操作：回车保留 / r 移除 / c 修改", "")
         else:
+            print("  当前视觉模型测试未通过；继续保留后，图片理解可能无法正常使用。")
             action = _ask("测试未通过，建议修改。操作：c 修改 / r 移除 / 回车强制保留", "c")
 
         if action.lower() == "r":
@@ -429,7 +432,8 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
         )
         if ok:
             break
-        retry = _ask("重新输入？(Y/n)", "Y")
+        print("  该视觉模型暂不可用。若跳过，图片理解可能无法正常使用。")
+        retry = _ask("是否重新输入？(Y/n)", "Y")
         if retry.lower() in ("n", "no"):
             for k in ("VISION_PROVIDER", "VISION_API_KEY", "VISION_BASE_URL", "VISION_MODEL"):
                 env.pop(k, None)
