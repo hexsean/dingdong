@@ -1,6 +1,7 @@
 """交互式引导程序。
 
 支持增量配置：已有配置项显示为默认值，回车即可保留。
+使用 simple-term-menu 提供上下键选择，不支持时自动降级为数字输入。
 """
 
 from __future__ import annotations
@@ -11,27 +12,24 @@ import sys
 from pathlib import Path
 
 PROVIDERS = [
-    # --- Anthropic 原生 ---
     {"key": "anthropic",  "name": "Anthropic",           "type": "anthropic",
      "base_url": "", "model": "claude-sonnet-4-6"},
-    # --- OpenAI 原生 ---
-    {"key": "openai-com", "name": "OpenAI",             "type": "openai",
+    {"key": "openai-com", "name": "OpenAI",              "type": "openai",
      "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
-    # --- OpenAI 兼容渠道 ---
-    {"key": "mimo-plan",  "name": "MiMo Token Plan（官方订阅）", "type": "openai",
+    {"key": "mimo-plan",  "name": "MiMo",                "type": "openai",
      "base_url": "https://token-plan-cn.xiaomimimo.com/v1", "model": "mimo-v2.5-pro",
-     "ask_base_url": True, "vision_model": "mimo-v2.5"},
-    {"key": "deepseek",   "name": "DeepSeek",           "type": "openai",
+     "vision_model": "mimo-v2.5"},
+    {"key": "deepseek",   "name": "DeepSeek",            "type": "openai",
      "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
-    {"key": "openrouter", "name": "OpenRouter",         "type": "openai",
+    {"key": "openrouter", "name": "OpenRouter",          "type": "openai",
      "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/auto"},
-    {"key": "siliconflow","name": "硅基流动",            "type": "openai",
+    {"key": "siliconflow","name": "硅基流动",             "type": "openai",
      "base_url": "https://api.siliconflow.cn/v1", "model": "Qwen/Qwen3-8B"},
-    {"key": "zhipu",      "name": "智谱 GLM",           "type": "openai",
+    {"key": "zhipu",      "name": "智谱 GLM",            "type": "openai",
      "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash"},
-    {"key": "moonshot",   "name": "Moonshot",           "type": "openai",
+    {"key": "moonshot",   "name": "Moonshot",            "type": "openai",
      "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
-    {"key": "custom",     "name": "自定义（OpenAI 兼容）","type": "openai",
+    {"key": "custom",     "name": "自定义 OpenAI 兼容",  "type": "openai",
      "base_url": "", "model": ""},
 ]
 
@@ -43,6 +41,41 @@ _TZ_OPTIONS = [
     ("America/Los_Angeles","洛杉矶"),
     ("Europe/London",      "伦敦"),
 ]
+
+
+# ── UI helpers ──────────────────────────────────────────────
+
+
+def _section(title: str) -> None:
+    width = 44
+    line = "─" * width
+    print(f"\n  ── {title} {line[:width - len(title) - 1]}\n")
+
+
+def _select(title: str, options: list[str], default: int = 0) -> int:
+    """Arrow-key selection with fallback to number input."""
+    try:
+        from simple_term_menu import TerminalMenu
+        menu = TerminalMenu(
+            options,
+            title=f"\n  {title}\n",
+            cursor_index=default,
+            menu_cursor="  ▸ ",
+            menu_cursor_style=("fg_cyan", "bold"),
+            menu_highlight_style=("fg_cyan", "bold"),
+        )
+        idx = menu.show()
+        return idx if idx is not None else default
+    except Exception:
+        for i, opt in enumerate(options):
+            mark = " ←当前" if i == default else ""
+            print(f"    {i + 1}. {opt}{mark}")
+        print()
+        while True:
+            raw = _ask("输入编号", str(default + 1))
+            if raw.isdigit() and 1 <= int(raw) <= len(options):
+                return int(raw) - 1
+            print(f"  请输入 1-{len(options)}")
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -70,12 +103,14 @@ def _is_xiaomi_mimo_base_url(base_url: str) -> bool:
 
 
 def _ask_secret(prompt: str, current: str = "") -> str:
-    """敏感字段输入，已有值时仅显示脱敏版本。"""
     if current:
         print(f"  当前: {_mask(current)}")
         val = _ask(f"{prompt}（回车保留）")
         return val if val else current
     return _ask(prompt)
+
+
+# ── Model testing ───────────────────────────────────────────
 
 
 def _make_test_image_b64() -> str:
@@ -89,7 +124,6 @@ def _make_test_image_b64() -> str:
 
 def _test_model(provider_type: str, api_key: str, model: str, base_url: str = "",
                 *, test_vision: bool = False) -> tuple[bool, str]:
-    """发送测试消息验证模型配置。test_vision=True 时额外发图片验证视觉能力。"""
     label = f"{model} (视觉)" if test_vision else model
     print(f"\n  测试 {label} ...", end=" ", flush=True)
 
@@ -146,7 +180,7 @@ def _classify_error(exc: Exception) -> str:
     if "not supported model" in msg.lower():
         return "模型不存在或当前订阅不支持；MiMo 模型名需使用小写，如 mimo-v2.5-pro"
     if code == 404 or "not found" in msg.lower() or "does not exist" in msg.lower():
-        return f"模型不存在，请检查模型名称"
+        return "模型不存在，请检查模型名称"
     if "image" in msg.lower() and ("format" in msg.lower() or "decode" in msg.lower()):
         return "图片格式不支持，该模型可能不具备视觉能力"
     if code == 429 or "rate" in msg.lower():
@@ -156,8 +190,11 @@ def _classify_error(exc: Exception) -> str:
     if "timeout" in msg.lower() or "timed out" in msg.lower():
         return "请求超时，请检查网络"
     if "connection" in msg.lower() or "resolve" in msg.lower():
-        return f"无法连接到服务器，请检查 Base URL"
+        return "无法连接到服务器，请检查 Base URL"
     return f"{name}: {msg}"
+
+
+# ── Env file ops ────────────────────────────────────────────
 
 
 def _load_env(path: Path) -> dict[str, str]:
@@ -192,6 +229,9 @@ def _request_restart(data: Path) -> None:
     request_service_restart(data)
 
 
+# ── Provider detection (for existing config) ────────────────
+
+
 def _matches_provider_base_url(provider: dict, base_url: str) -> bool:
     normalized = base_url.rstrip("/")
     provider_base_url = provider.get("base_url", "").rstrip("/")
@@ -203,7 +243,6 @@ def _matches_provider_base_url(provider: dict, base_url: str) -> bool:
 
 
 def _detect_provider(existing: dict[str, str]) -> dict | None:
-    """从已有配置推断当前渠道。"""
     prov = existing.get("LLM_PROVIDER", "")
     if prov == "anthropic":
         for p in PROVIDERS:
@@ -215,8 +254,33 @@ def _detect_provider(existing: dict[str, str]) -> dict | None:
             if p["type"] == "openai" and _matches_provider_base_url(p, base_url):
                 return p
         if base_url:
-            return PROVIDERS[-1]  # custom
+            return PROVIDERS[-1]
     return None
+
+
+def _detect_provider_index(existing: dict[str, str]) -> int:
+    prov = _detect_provider(existing)
+    if prov is None:
+        return 0
+    for i, p in enumerate(PROVIDERS):
+        if p["key"] == prov["key"]:
+            return i
+    return 0
+
+
+# ── Context length detection ────────────────────────────────
+
+
+def _query_context_length(model_name: str, data_dir: Path | None = None) -> int | None:
+    try:
+        from .models import fetch_model_info
+        info = fetch_model_info(model_name, data_dir=data_dir)
+        return info.context_length if info.context_length else None
+    except Exception:
+        return None
+
+
+# ── Main setup ──────────────────────────────────────────────
 
 
 def run_setup(data_dir: str = "./data") -> None:
@@ -228,147 +292,83 @@ def run_setup(data_dir: str = "./data") -> None:
     is_update = bool(existing)
 
     print()
-    print("  叮咚 · 配置向导")
-    print("  ================")
+    print("  ┌─────────────────────────────────────┐")
+    print("  │        叮咚 · 配置向导               │")
+    print("  └─────────────────────────────────────┘")
     if is_update:
         current_provider = _detect_provider(existing)
         current_name = current_provider["name"] if current_provider else "未知"
-        print(f"  检测到已有配置（{current_name}），回车保留当前值。")
-    print()
+        print(f"\n  检测到已有配置（{current_name}），回车保留当前值。")
 
     env: dict[str, str] = dict(existing)
 
-    # --- LLM ---
-    print("  [1/5] 选择模型渠道\n")
-    current = _detect_provider(existing)
-    for i, p in enumerate(PROVIDERS):
-        mark = " ←当前" if current and p["key"] == current["key"] else ""
-        print(f"    {i + 1}. {p['name']}{mark}")
-    print()
+    # ── [1/5] 模型配置 ──
 
-    if is_update:
-        prompt = "输入编号（回车保留当前）"
-    else:
-        prompt = "输入编号"
+    _section("[1/5] 模型配置")
+
+    default_idx = _detect_provider_index(existing) if is_update else 0
+    options = []
+    for p in PROVIDERS:
+        options.append(p["name"])
+    chosen_idx = _select("选择模型渠道", options, default=default_idx)
+    provider = PROVIDERS[chosen_idx]
 
     while True:
-        try:
-            raw = input(f"  {prompt}: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n  已取消。")
-            sys.exit(1)
-        if not raw and is_update:
-            provider = _detect_provider(existing) or PROVIDERS[-1]
-            break
-        if raw.isdigit() and 1 <= int(raw) <= len(PROVIDERS):
-            provider = PROVIDERS[int(raw) - 1]
-            break
-        print(f"  请输入 1-{len(PROVIDERS)}")
-
-    while True:
-        if provider["type"] == "anthropic":
-            env["LLM_PROVIDER"] = "anthropic"
-            env["ANTHROPIC_API_KEY"] = _ask_secret("API Key", existing.get("ANTHROPIC_API_KEY", ""))
-            env["ANTHROPIC_MODEL"] = _ask("Model", existing.get("ANTHROPIC_MODEL", provider["model"]))
-            ok, _ = _test_model("anthropic", env["ANTHROPIC_API_KEY"], env["ANTHROPIC_MODEL"])
-        else:
-            env["LLM_PROVIDER"] = "openai"
-            env["OPENAI_API_KEY"] = _ask_secret("API Key", existing.get("OPENAI_API_KEY", ""))
-            if provider["key"] == "custom":
-                env["OPENAI_BASE_URL"] = _ask("Base URL", existing.get("OPENAI_BASE_URL", ""))
-                env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", ""))
-            elif provider.get("ask_base_url"):
-                base_default = (
-                    existing.get("OPENAI_BASE_URL", provider["base_url"])
-                    if current and current["key"] == provider["key"]
-                    else provider["base_url"]
-                )
-                model_default = (
-                    existing.get("OPENAI_MODEL", provider["model"])
-                    if current and current["key"] == provider["key"]
-                    else provider["model"]
-                )
-                env["OPENAI_BASE_URL"] = _ask("Base URL", base_default)
-                env["OPENAI_MODEL"] = _ask("Model", model_default)
-            else:
-                env["OPENAI_BASE_URL"] = provider["base_url"]
-                env["OPENAI_MODEL"] = _ask("Model", existing.get("OPENAI_MODEL", provider["model"]))
-            ok, _ = _test_model("openai", env["OPENAI_API_KEY"], env["OPENAI_MODEL"], env.get("OPENAI_BASE_URL", ""))
+        api_key, model, base_url = _configure_provider(provider, env, existing)
+        ok, _ = _test_model(
+            provider["type"], api_key, model,
+            base_url if provider["type"] == "openai" else "",
+        )
         if ok:
+            _apply_provider_config(env, provider, api_key, model, base_url)
             break
         print("  继续保存后，机器人可能无法正常回复。")
         retry = _ask("是否重新输入？(Y/n)", "Y")
         if retry.lower() in ("n", "no"):
-            print("  已保存未通过测试的模型配置；请修正后再启动服务。")
+            _apply_provider_config(env, provider, api_key, model, base_url)
+            print("  已保存未通过测试的模型配置。")
             break
-    print()
 
-    # --- Vision ---
-    print("  [2/5] 图片理解\n")
-    print("    图片理解能力取决于所选模型。启动时自动检测主模型是否支持。")
-    print("    也可配置独立视觉模型，仅在收到图片时调用。\n")
-    has_vision_config = bool(existing.get("VISION_PROVIDER"))
+    # context length
+    _setup_context_length(env, existing, model, data_dir=data)
 
-    if has_vision_config:
-        cur_vmodel = existing.get("VISION_MODEL", "")
-        print(f"    当前视觉模型：{cur_vmodel}")
+    # ── [2/5] 视觉模型 ──
 
-        ok, _ = _test_model(
-            existing.get("VISION_PROVIDER", "openai"),
-            existing.get("VISION_API_KEY", ""),
-            cur_vmodel,
-            existing.get("VISION_BASE_URL", ""),
-            test_vision=True,
-        )
-        if ok:
-            action = _ask("操作：回车保留 / r 移除 / c 修改", "")
-        else:
-            print("  当前视觉模型测试未通过；继续保留后，图片理解可能无法正常使用。")
-            action = _ask("测试未通过，建议修改。操作：c 修改 / r 移除 / 回车强制保留", "c")
+    _section("[2/5] 视觉模型")
+    _setup_vision(env, existing, provider, model)
 
-        if action.lower() == "r":
-            for k in ("VISION_PROVIDER", "VISION_API_KEY", "VISION_BASE_URL", "VISION_MODEL"):
-                env.pop(k, None)
-            print("  已移除。")
-        elif action.lower() == "c":
-            _setup_vision(env, existing)
-        else:
-            print("  保留现有配置。")
-    else:
-        setup_v = _ask("配置独立视觉模型？(y/N)", "N")
-        if setup_v.lower() in ("y", "yes"):
-            _setup_vision(env, existing)
-    print()
+    # ── [3/5] Exa 搜索 ──
 
-    # --- Search ---
-    print("  [3/5] Exa 搜索（可选，回车跳过）")
+    _section("[3/5] Exa 搜索（可选）")
     exa_key = _ask_secret("Exa API Key", existing.get("EXA_API_KEY", ""))
     if exa_key:
         env["EXA_API_KEY"] = exa_key
-    print()
 
-    # --- Timezone ---
-    print("  [4/5] 时区\n")
+    # ── [4/5] 时区 ──
+
+    _section("[4/5] 时区")
     cur_tz = existing.get("SCHEDULER_TZ", "")
     if cur_tz:
-        print(f"    当前：{cur_tz}")
+        print(f"  当前：{cur_tz}")
         change_tz = _ask("修改时区？(y/N)", "N")
-        if change_tz.lower() not in ("y", "yes"):
-            print("  保留现有时区。")
-        else:
+        if change_tz.lower() in ("y", "yes"):
             _setup_timezone(env)
+        else:
+            print("  保留现有时区。")
     else:
         _setup_timezone(env)
 
-    print()
-    print("  [5/5] 微信内更新\n")
+    # ── [5/5] 微信内更新 ──
+
+    _section("[5/5] 微信内更新")
     _setup_wechat_update(env, existing)
+
+    # ── 保存 & 登录 ──
 
     env["DATA_DIR"] = str(data)
     _write_env(env_file, env)
     _write_updater_env(data / "updater.env", env)
 
-    # --- WeChat Login ---
     print()
     session_path = data / "session.json"
     if session_path.exists():
@@ -410,35 +410,149 @@ def run_setup(data_dir: str = "./data") -> None:
     print()
 
 
-def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
-    print("    选择视觉模型渠道（与主模型可以不同）：\n")
-    for i, p in enumerate(PROVIDERS):
-        print(f"      {i + 1}. {p['name']}")
+# ── Provider configuration ──────────────────────────────────
+
+
+def _configure_provider(provider: dict, env: dict, existing: dict
+                        ) -> tuple[str, str, str]:
+    """Gather credentials and model for a provider. Returns (api_key, model, base_url)."""
+    current = _detect_provider(existing)
+
+    if provider["type"] == "anthropic":
+        api_key = _ask_secret("API Key", existing.get("ANTHROPIC_API_KEY", ""))
+        model = _ask("Model", existing.get("ANTHROPIC_MODEL", provider["model"]))
+        return api_key, model, ""
+
+    # openai-compatible
+    api_key = _ask_secret("API Key", existing.get("OPENAI_API_KEY", ""))
+
+    if provider["key"] == "custom":
+        base_url = _ask("Base URL", existing.get("OPENAI_BASE_URL", ""))
+        model = _ask("Model", existing.get("OPENAI_MODEL", ""))
+    else:
+        base_url = provider["base_url"]
+        model_default = (
+            existing.get("OPENAI_MODEL", provider["model"])
+            if current and current["key"] == provider["key"]
+            else provider["model"]
+        )
+        model = _ask("Model", model_default)
+
+    return api_key, model, base_url
+
+
+def _apply_provider_config(env: dict, provider: dict, api_key: str, model: str, base_url: str) -> None:
+    if provider["type"] == "anthropic":
+        env["LLM_PROVIDER"] = "anthropic"
+        env["ANTHROPIC_API_KEY"] = api_key
+        env["ANTHROPIC_MODEL"] = model
+    else:
+        env["LLM_PROVIDER"] = "openai"
+        env["OPENAI_API_KEY"] = api_key
+        env["OPENAI_MODEL"] = model
+        env["OPENAI_BASE_URL"] = base_url
+
+
+# ── Context length ──────────────────────────────────────────
+
+
+def _setup_context_length(env: dict, existing: dict, model: str, data_dir: Path | None = None) -> None:
     print()
+    cur = existing.get("CONTEXT_LENGTH", "")
 
-    while True:
-        v_raw = _ask("输入编号（回车跳过）")
-        if not v_raw:
-            return
-        if v_raw.isdigit() and 1 <= int(v_raw) <= len(PROVIDERS):
-            break
-        print(f"  请输入 1-{len(PROVIDERS)}，或回车跳过")
+    print("  检测模型上下文长度 ...", end=" ", flush=True)
+    detected = _query_context_length(model, data_dir=data_dir)
+    if detected:
+        print(f"{detected:,} tokens")
+        default = str(detected)
+        if cur and cur != str(detected):
+            print(f"  当前配置：{cur}，已更新为检测值")
+    else:
+        print("未检测到")
+        default = cur if cur else ""
 
-    vp = PROVIDERS[int(v_raw) - 1]
+    val = _ask("上下文长度（tokens，回车接受默认值，输入 0 清除）", default)
+    cleaned = val.replace(",", "").strip() if val else ""
+    if cleaned and cleaned.isdigit() and int(cleaned) > 0:
+        env["CONTEXT_LENGTH"] = cleaned
+    elif cleaned == "0" or (not val and not default):
+        env.pop("CONTEXT_LENGTH", None)
+
+
+# ── Vision configuration ────────────────────────────────────
+
+_VISION_KEYS = ("VISION_PROVIDER", "VISION_API_KEY", "VISION_BASE_URL", "VISION_MODEL")
+
+
+def _clear_vision_config(env: dict) -> None:
+    for k in _VISION_KEYS:
+        env.pop(k, None)
+
+
+def _setup_vision(env: dict, existing: dict, main_provider: dict, main_model: str) -> None:
+    print("  图片理解能力取决于所选模型。启动时自动检测主模型是否支持。")
+    print("  也可配置独立视觉模型，仅在收到图片时调用。\n")
+
+    has_vision_config = bool(existing.get("VISION_PROVIDER"))
+
+    if has_vision_config:
+        cur_vmodel = existing.get("VISION_MODEL", "")
+        print(f"  当前视觉模型：{cur_vmodel}")
+        ok, _ = _test_model(
+            existing.get("VISION_PROVIDER", "openai"),
+            existing.get("VISION_API_KEY", ""),
+            cur_vmodel,
+            existing.get("VISION_BASE_URL", ""),
+            test_vision=True,
+        )
+        if ok:
+            actions = ["keep", "main", "separate", "remove"]
+            options = ["保留现有配置", "与主模型相同", "配置独立视觉模型", "移除视觉模型"]
+            idx = _select("视觉模型配置", options, default=0)
+        else:
+            print("  当前视觉模型测试未通过。")
+            actions = ["main", "separate", "remove"]
+            options = ["与主模型相同", "配置独立视觉模型", "移除视觉模型"]
+            idx = _select("视觉模型配置", options, default=0)
+
+        action = actions[idx]
+        if action == "keep":
+            print("  保留现有配置。")
+        elif action == "main":
+            _clear_vision_config(env)
+            print("  已切换为主模型，视觉能力将在启动时自动检测。")
+        elif action == "separate":
+            _configure_separate_vision(env, existing)
+        elif action == "remove":
+            _clear_vision_config(env)
+            print("  已移除视觉模型。")
+    else:
+        options = [f"与主模型相同（{main_model}）", "配置独立视觉模型"]
+        choice = _select("视觉模型", options, default=0)
+        if choice == 0:
+            print("  视觉能力将在启动时自动检测。")
+        else:
+            _configure_separate_vision(env, existing)
+
+
+def _configure_separate_vision(env: dict, existing: dict) -> None:
+    options = [p["name"] for p in PROVIDERS]
+    v_idx = _select("选择视觉模型渠道", options, default=0)
+    vp = PROVIDERS[v_idx]
 
     while True:
         env["VISION_PROVIDER"] = vp["type"]
         env["VISION_API_KEY"] = _ask_secret("视觉模型 API Key", existing.get("VISION_API_KEY", ""))
         vision_default = vp.get("vision_model", vp["model"])
+
         if vp["key"] == "custom":
             env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", ""))
             env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", ""))
-        elif vp.get("ask_base_url"):
-            env["VISION_BASE_URL"] = _ask("Base URL", existing.get("VISION_BASE_URL", vp["base_url"]))
-            env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vision_default))
         else:
             if vp["base_url"]:
                 env["VISION_BASE_URL"] = vp["base_url"]
+            else:
+                env.pop("VISION_BASE_URL", None)
             env["VISION_MODEL"] = _ask("Model", existing.get("VISION_MODEL", vision_default))
 
         ok, _ = _test_model(
@@ -448,53 +562,51 @@ def _setup_vision(env: dict[str, str], existing: dict[str, str]) -> None:
         )
         if ok:
             break
-        print("  该视觉模型暂不可用。若跳过，图片理解可能无法正常使用。")
         retry = _ask("是否重新输入？(Y/n)", "Y")
         if retry.lower() in ("n", "no"):
-            for k in ("VISION_PROVIDER", "VISION_API_KEY", "VISION_BASE_URL", "VISION_MODEL"):
-                env.pop(k, None)
+            _clear_vision_config(env)
             print("  已跳过视觉模型配置。")
             return
 
-    print("    视觉能力将在启动时自动检测。如检测不到，可在 .env 中设置 VISION_ENABLED=true 强制开启。")
+
+# ── Timezone ────────────────────────────────────────────────
 
 
-def _setup_timezone(env: dict[str, str]) -> None:
-    for i, (tz_id, label) in enumerate(_TZ_OPTIONS, 1):
-        print(f"    {i}. {label} ({tz_id})")
-    print(f"    0. 自定义")
-    print()
-    while True:
-        raw_tz = _ask("输入编号", "1")
-        if raw_tz.isdigit():
-            idx = int(raw_tz)
-            if idx == 0:
-                custom_tz = _ask("IANA 时区（如 Asia/Hong_Kong）")
-                try:
-                    from zoneinfo import ZoneInfo
-                    ZoneInfo(custom_tz)
-                    env["SCHEDULER_TZ"] = custom_tz
-                    break
-                except (KeyError, Exception):
-                    print(f"  无效时区：{custom_tz}，请重新输入")
-                    continue
-            if 1 <= idx <= len(_TZ_OPTIONS):
-                env["SCHEDULER_TZ"] = _TZ_OPTIONS[idx - 1][0]
+def _setup_timezone(env: dict) -> None:
+    tz_options = [f"{label} ({tz_id})" for tz_id, label in _TZ_OPTIONS]
+    tz_options.append("自定义")
+
+    idx = _select("选择时区", tz_options, default=0)
+    if idx < len(_TZ_OPTIONS):
+        env["SCHEDULER_TZ"] = _TZ_OPTIONS[idx][0]
+    else:
+        while True:
+            custom_tz = _ask("IANA 时区（如 Asia/Hong_Kong）")
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(custom_tz)
+                env["SCHEDULER_TZ"] = custom_tz
                 break
-        print(f"  请输入 0-{len(_TZ_OPTIONS)}")
+            except (KeyError, Exception):
+                print(f"  无效时区：{custom_tz}，请重新输入")
 
 
-def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
+# ── WeChat update ───────────────────────────────────────────
+
+
+def _setup_wechat_update(env: dict, existing: dict) -> None:
     current_enabled = _is_enabled(existing.get("WECHAT_UPDATE_ENABLED", "true"))
     if current_enabled:
-        print("    当前：已开启")
+        print("  当前：已开启")
     else:
-        print("    当前：未开启")
-    print("    开启后有更新提醒时可直接回复「确认更新」；也可发「检查更新」手动检查。")
+        print("  当前：未开启")
+    print("  开启后有更新提醒时可直接回复「确认更新」；也可发「检查更新」手动检查。")
     print()
 
-    default = "Y" if current_enabled else "N"
-    enable = _ask("开启微信内更新？(y/N)" if default == "N" else "开启微信内更新？(Y/n)", default)
+    options = ["开启", "关闭"]
+    default = 0 if current_enabled else 1
+    choice = _select("微信内更新", options, default=default)
+
     token = existing.get("WATCHTOWER_HTTP_API_TOKEN", "").strip()
     if not token:
         token = secrets.token_urlsafe(32)
@@ -503,7 +615,7 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
         print(f"  保留 updater 令牌：{_mask(token)}")
     env["WATCHTOWER_HTTP_API_TOKEN"] = token
 
-    if enable.lower() not in ("y", "yes"):
+    if choice == 1:
         env["WECHAT_UPDATE_ENABLED"] = "false"
         print("  已关闭微信内更新。")
         return
@@ -514,7 +626,7 @@ def _setup_wechat_update(env: dict[str, str], existing: dict[str, str]) -> None:
     print("  已开启微信内更新。")
 
 
-def _print_update_hint(env: dict[str, str]) -> None:
+def _print_update_hint(env: dict) -> None:
     if not _is_enabled(env.get("WECHAT_UPDATE_ENABLED", "")):
         return
     print("  微信内更新已开启。有更新提醒时回复「确认更新」；也可发「检查更新」手动检查。")

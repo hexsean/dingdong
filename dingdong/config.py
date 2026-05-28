@@ -20,6 +20,7 @@ class Config:
     long_poll_timeout_ms: int
     exa_api_key: str
     history_limit: int
+    context_length: int
     allowed_user_ids: frozenset[str]
     vision_enabled: bool | None  # True/False=手动覆盖, None=自动检测
     vision_provider: str  # ""=用主模型, "anthropic"/"openai"=独立视觉模型
@@ -79,7 +80,8 @@ def load_config() -> Config:
         scheduler_tz=os.getenv("SCHEDULER_TZ", "Asia/Shanghai"),
         long_poll_timeout_ms=int(os.getenv("LONG_POLL_TIMEOUT_MS", "35000")),
         exa_api_key=os.getenv("EXA_API_KEY", ""),
-        history_limit=int(os.getenv("HISTORY_LIMIT", "20")),
+        history_limit=int(os.getenv("HISTORY_LIMIT", "200")),
+        context_length=int(os.getenv("CONTEXT_LENGTH", "0")),
         allowed_user_ids=allowed,
         vision_enabled=vision_enabled,
         vision_provider=os.getenv("VISION_PROVIDER", "").strip().lower(),

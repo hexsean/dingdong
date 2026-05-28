@@ -70,9 +70,17 @@ class Bot:
         self._model_info = fetch_model_info(
             vision_model_name, data_dir=cfg.data_dir, vision_override=vision_override,
         )
+        main_model = cfg.anthropic_model if cfg.llm_provider == "anthropic" else cfg.openai_model
+        if self._vision_llm:
+            main_info = fetch_model_info(main_model, data_dir=cfg.data_dir)
+            main_ctx = main_info.context_length if main_info else None
+        else:
+            main_ctx = self._model_info.context_length if self._model_info else None
+        effective_ctx = cfg.context_length or main_ctx or 0
         self._intent = IntentRouter(self._llm, self._store, self._scheduler,
                                     history_limit=cfg.history_limit, model_info=self._model_info,
                                     vision_llm=self._vision_llm,
+                                    context_length=effective_ctx,
                                     wechat_update_enabled=cfg.wechat_update_enabled,
                                     watchtower_url=cfg.watchtower_url,
                                     watchtower_token=cfg.watchtower_token)

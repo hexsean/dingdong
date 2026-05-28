@@ -223,6 +223,8 @@ class OpenAIProvider:
         if self._is_deepseek:
             kwargs.setdefault("extra_body", {})["thinking"] = {"type": "enabled"}
             kwargs["reasoning_effort"] = "low"
+        elif self._is_xiaomi_mimo:
+            kwargs["reasoning_effort"] = "low"
         resp = self._client.chat.completions.create(**kwargs)
         choice = resp.choices[0]
         msg = choice.message

@@ -29,6 +29,62 @@ from .updater import is_disabled, is_newer_version, local_version, remote_versio
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
+RESPONSE_TOKEN_BUDGET = 2048
+TOOL_OVERHEAD_TOKENS = 200
+TOOL_ROUND_RESERVE = 4000
+FALLBACK_HISTORY_LIMIT = 20
+
+
+def _is_cjk(c: str) -> bool:
+    cp = ord(c)
+    return (
+        0x4E00 <= cp <= 0x9FFF
+        or 0x3400 <= cp <= 0x4DBF
+        or 0x3000 <= cp <= 0x303F
+        or 0xFF00 <= cp <= 0xFFEF
+        or 0x3040 <= cp <= 0x30FF
+        or 0xAC00 <= cp <= 0xD7AF
+    )
+
+
+def _estimate_tokens(text: str) -> int:
+    """Conservative token count estimate for context budget."""
+    if not text:
+        return 0
+    cjk = sum(1 for c in text if _is_cjk(c))
+    other = len(text) - cjk
+    return max(1, int(cjk * 1.5 + other * 0.4))
+
+
+def _estimate_message_tokens(msg: dict) -> int:
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return _estimate_tokens(content) + 4
+    parts_text: list[str] = []
+    image_count = 0
+    for part in content:
+        if isinstance(part, dict):
+            t = part.get("type", "")
+            if t == "text":
+                parts_text.append(part.get("text", ""))
+            elif t == "tool_use":
+                parts_text.append(json.dumps(part.get("input", {})))
+            elif t == "tool_result":
+                rc = part.get("content", "")
+                parts_text.append(rc if isinstance(rc, str) else json.dumps(rc))
+            elif t in ("image", "image_url"):
+                image_count += 1
+    tokens = _estimate_tokens(" ".join(parts_text)) + 4
+    tokens += image_count * 1000
+    return tokens
+
+
+def _estimate_tool_spec_tokens(tools: list[ToolSpec]) -> int:
+    total = 0
+    for t in tools:
+        text = t.name + " " + t.description + " " + json.dumps(t.input_schema)
+        total += _estimate_tokens(text) + 10
+    return total
 
 CLEAR_KEYWORDS = {"清空对话", "新对话", "重置对话", "清除历史"}
 GREETING_KEYWORDS = {"你好", "hi", "hello", "hey", "嗨", "在吗", "在不在", "你在吗"}
@@ -212,8 +268,9 @@ CANCEL_KEYWORDS = {"取消", "取消更新", "不用", "不更新", "先不更�
 
 class IntentRouter:
     def __init__(self, llm: LLMProvider, store: JobStore, scheduler: Scheduler, *,
-                 history_limit: int = 20, model_info: "ModelInfo | None" = None,
+                 history_limit: int = 200, model_info: "ModelInfo | None" = None,
                  vision_llm: LLMProvider | None = None,
+                 context_length: int = 0,
                  wechat_update_enabled: bool = False,
                  watchtower_url: str = "http://watchtower:8080/v1/update",
                  watchtower_token: str = "") -> None:
@@ -223,6 +280,7 @@ class IntentRouter:
         self._store = store
         self._scheduler = scheduler
         self._history_limit = history_limit
+        self._context_length = context_length
         self._on_status = None
         self._on_update_progress = None
         self._pending_clear: set[str] = set()
@@ -310,8 +368,7 @@ class IntentRouter:
         else:
             self._store.append_message(owner_user_id, "user", text or "[图片]")
 
-        history = self._store.get_history(owner_user_id, limit=self._history_limit)
-        messages: list[dict[str, Any]] = list(history)
+        messages: list[dict[str, Any]] = list(self._build_context(owner_user_id))
 
         if use_direct_vision:
             last_user = messages[-1] if messages and messages[-1]["role"] == "user" else None
@@ -336,7 +393,7 @@ class IntentRouter:
                 system=self._system_prompt(),
                 messages=messages,
                 tools=tools,
-                max_tokens=2048,
+                max_tokens=RESPONSE_TOKEN_BUDGET,
             )
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": resp.content}
             if resp.reasoning_content is not None:
@@ -382,6 +439,37 @@ class IntentRouter:
 
     def _tz(self) -> ZoneInfo:
         return ZoneInfo(self._scheduler.tz)
+
+    def _build_context(self, owner_user_id: str) -> list[dict[str, str]]:
+        """Build conversation history within token budget."""
+        if not self._context_length:
+            return self._store.get_history(owner_user_id, limit=FALLBACK_HISTORY_LIMIT)
+
+        history = self._store.get_history(owner_user_id, limit=self._history_limit)
+        if not history:
+            return history
+
+        tools = list(TOOL_SPECS)
+        if search_available():
+            tools.extend(SEARCH_TOOL_SPECS)
+
+        system_tokens = _estimate_tokens(self._system_prompt())
+        tool_tokens = _estimate_tool_spec_tokens(tools) + TOOL_OVERHEAD_TOKENS
+        overhead = system_tokens + tool_tokens + RESPONSE_TOKEN_BUDGET + TOOL_ROUND_RESERVE
+        available = max(0, self._context_length - overhead)
+
+        costs = [_estimate_message_tokens(m) for m in history]
+        total = sum(costs)
+        idx = 0
+        while idx < len(history) and total > available:
+            total -= costs[idx]
+            idx += 1
+        history = history[idx:]
+
+        while history and history[0].get("role") != "user":
+            history = history[1:]
+
+        return history
 
     def _system_prompt(self) -> str:
         now = datetime.now(self._tz())
