@@ -391,6 +391,8 @@ function hideModal() {
   document.getElementById('v-modal').classList.add('hidden');
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  const img = document.getElementById('qr-img');
+  if (img.dataset.objurl) { URL.revokeObjectURL(img.dataset.objurl); delete img.dataset.objurl; img.removeAttribute('src'); }
   currentAddId = null;
 }
 
@@ -419,6 +421,26 @@ async function doCreate() {
   await startLogin(r.data.id);
 }
 
+// <img> 无法携带 Authorization 头，二维码接口需鉴权，故用 fetch 带 token 取 blob
+async function loadQrImage(accountId) {
+  const img = document.getElementById('qr-img');
+  for (let i = 0; i < 6; i++) {
+    try {
+      const res = await fetch('/api/accounts/' + accountId + '/qrcode.png?' + Date.now(),
+        {headers: token ? {'Authorization': 'Bearer ' + token} : {}});
+      if (res.ok) {
+        const url = URL.createObjectURL(await res.blob());
+        if (img.dataset.objurl) URL.revokeObjectURL(img.dataset.objurl);
+        img.dataset.objurl = url;
+        img.src = url;
+        return;
+      }
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 400));
+  }
+  document.getElementById('qr-status').textContent = '二维码加载失败，请重试';
+}
+
 async function startLogin(accountId) {
   currentAddId = accountId;
   document.getElementById('add-s1').classList.add('hidden');
@@ -434,8 +456,8 @@ async function startLogin(accountId) {
     return;
   }
   if (r.data.qr_url) {
-    document.getElementById('qr-img').src = '/api/accounts/' + accountId + '/qrcode.png?' + Date.now();
     document.getElementById('qr-status').textContent = '等待扫码...';
+    loadQrImage(accountId);
     startCountdown();
     pollTimer = setInterval(() => pollQr(accountId), 2000);
   } else {
