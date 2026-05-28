@@ -78,6 +78,20 @@ def _extract_poll_token(resp: dict[str, Any]) -> str:
     )
 
 
+def _extract_bot_token(status: dict[str, Any]) -> str | None:
+    """从 get_qrcode_status 响应中提取 bot_token（兼容一层嵌套）。"""
+    value = status.get("bot_token")
+    if value and isinstance(value, str):
+        return value
+    for nest in ("data", "result"):
+        sub = status.get(nest)
+        if isinstance(sub, dict):
+            value = sub.get("bot_token")
+            if value and isinstance(value, str):
+                return value
+    return None
+
+
 def ensure_login(
     session_path: Path,
     qrcode_png_path: Path,
@@ -131,8 +145,15 @@ def ensure_login(
             log.info("qrcode status: %s", s or "(unknown)")
             last_status = s
 
-        if s in {"confirmed", "ok", "success"} and status.get("bot_token"):
-            bot_token = status["bot_token"]
+        if s in {"confirmed", "ok", "success"}:
+            bot_token = _extract_bot_token(status)
+            if not bot_token:
+                log.warning(
+                    "qrcode confirmed but no bot_token in response (keys=%s); keep polling",
+                    list(status.keys()),
+                )
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             save_session(
                 session_path,
                 {
@@ -186,8 +207,16 @@ def poll_login_status(
 
     s = (status.get("status") or status.get("state") or "").lower()
 
-    if s in {"confirmed", "ok", "success"} and status.get("bot_token"):
-        bot_token = status["bot_token"]
+    if s in {"confirmed", "ok", "success"}:
+        bot_token = _extract_bot_token(status)
+        if not bot_token:
+            # 已确认但本次响应还没带 token：不能当作完成，否则会丢弃登录会话且不保存 token。
+            # 保持轮询，等待携带 token 的后续响应。
+            log.warning(
+                "qrcode confirmed but no bot_token in response (keys=%s); keep polling",
+                list(status.keys()),
+            )
+            return {"status": "scanned"}
         save_session(
             session_path,
             {
@@ -198,6 +227,7 @@ def poll_login_status(
                 "login_at": int(time.time()),
             },
         )
+        log.info("login confirmed; bot_token saved to %s", session_path)
         return {"status": "confirmed", "bot_token": bot_token,
                 "client": client_factory(bot_token)}
 
