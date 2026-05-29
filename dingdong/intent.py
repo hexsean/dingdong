@@ -609,13 +609,16 @@ class IntentRouter:
                     "方案一：主模型换为 Claude Sonnet、GPT-4o 等视觉模型\n"
                     "方案二：在 .env 中单独配置视觉模型（VISION_PROVIDER / VISION_MODEL / VISION_API_KEY）")
 
+        # 每轮给用户消息盖「现在 HH:MM」：模型每轮都拿得到精确时刻、几乎不必再查时间；
+        # 历史消息的时间戳冻结在缓存前缀里，不会每轮打掉 KV 缓存（到分即可，省 token）。
+        time_tag = f"[现在 {datetime.now(self._tz()).strftime('%H:%M')}] "
         use_direct_vision = has_images and not self._vision_llm
         if has_images and self._vision_llm:
             image_desc = self._describe_images(image_bytes_list, text)
             user_text = f"{text}\n\n[图片内容：{image_desc}]" if text else f"[图片内容：{image_desc}]"
-            self._store.append_message(owner_user_id, "user", user_text, account_id=self._account_id)
+            self._store.append_message(owner_user_id, "user", time_tag + user_text, account_id=self._account_id)
         else:
-            self._store.append_message(owner_user_id, "user", text or "[图片]", account_id=self._account_id)
+            self._store.append_message(owner_user_id, "user", time_tag + (text or "[图片]"), account_id=self._account_id)
 
         messages: list[dict[str, Any]] = list(self._build_context(owner_user_id))
 
@@ -623,7 +626,7 @@ class IntentRouter:
             last_user = messages[-1] if messages and messages[-1]["role"] == "user" else None
             if last_user:
                 content_parts: list[dict[str, Any]] = []
-                content_parts.append({"type": "text", "text": text or "请描述这张图片。"})
+                content_parts.append({"type": "text", "text": time_tag + (text or "请描述这张图片。")})
                 for img_data in image_bytes_list:
                     content_parts.append({
                         "type": "image",
@@ -752,8 +755,11 @@ class IntentRouter:
 
         now = datetime.now(self._tz())
         weekday = "星期" + "一二三四五六日"[now.weekday()]
+        # 系统提示词只放日期（天级稳定，利于 KV 缓存）；精确时刻随每条用户消息开头的「现在 HH:MM」给。
         return ("\n".join(header) + "\n\n" + INTENT_SYSTEM_PROMPT
-                + f"\n当前版本：v{local_version()}\n当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}\n")
+                + f"\n当前版本：v{local_version()}"
+                + f"\n今天 {now.strftime('%Y-%m-%d')} {weekday}"
+                "（每条用户消息开头的「现在 HH:MM」即当前时刻；要精确到秒或重新核对用 get_current_time）\n")
 
     # ---------- vision ----------
 
@@ -900,7 +906,7 @@ class IntentRouter:
             if name == "get_current_time":
                 now = datetime.now(self._tz())
                 weekday = "星期" + "一二三四五六日"[now.weekday()]
-                return f"{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}"
+                return f"{now.strftime('%Y-%m-%d %H:%M:%S')} {weekday}"
             if name == "list_jobs":
                 return self._tool_list_jobs(owner_user_id)
             if name == "list_done_jobs":

@@ -63,6 +63,28 @@ class LLMProvider(Protocol):
 # ---------------- anthropic ----------------
 
 
+def _with_last_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """在最后一条消息打 cache_control 断点，缓存到当前轮为止的对话前缀（断点随对话自动前移）。
+
+    只浅拷贝、不改动入参；Anthropic 对过短前缀会忽略 cache_control（无副作用）。
+    """
+    if not messages:
+        return messages
+    content = messages[-1].get("content")
+    if isinstance(content, str):
+        if not content:
+            return messages
+        new_content: Any = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        new_content = [dict(b) if isinstance(b, dict) else b for b in content]
+        new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+    else:
+        return messages
+    out = list(messages)
+    out[-1] = {**out[-1], "content": new_content}
+    return out
+
+
 class AnthropicProvider:
     def __init__(self, api_key: str, model: str) -> None:
         import anthropic  # type: ignore
@@ -82,8 +104,11 @@ class AnthropicProvider:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": max_tokens,
-            "system": system,
-            "messages": messages,
+            # system 作为可缓存块 → 缓存 tools+system 这段又大又稳定（日级）的前缀；
+            # 最后一条消息再打一个断点 → 缓存到当前轮为止的对话历史（断点随对话前移）。
+            "system": ([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+                       if system else system),
+            "messages": _with_last_cache_breakpoint(messages),
         }
         if tools:
             kwargs["tools"] = [
