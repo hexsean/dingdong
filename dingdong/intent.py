@@ -16,6 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .expense import (
+    DUP_WINDOW_SECONDS,
     LARGE_EXPENSE_CENTS,
     aggregate_expenses as _aggregate_expenses,
     expense_to_brief as _expense_to_brief,
@@ -215,20 +216,50 @@ def _is_done_oneshot(job: Job) -> bool:
     return job.schedule_kind == "date" and not job.enabled and job.last_run_at is not None
 
 
-def _merge_adjacent(history: list[dict[str, str]]) -> list[dict[str, str]]:
-    """合并相邻同角色消息。
+def _is_user_text(m: dict[str, Any]) -> bool:
+    """真实的用户文本消息（区别于角色同为 user、但内容是 tool_result 的工具结果消息）。"""
+    return m.get("role") == "user" and isinstance(m.get("content"), str)
 
-    主动推送（executor 写入的"已触发"记录）会在两条 assistant 之间多插一条，
-    形成连续同角色；部分 provider 不接受连续同角色消息，这里合并成一条。
-    此处历史内容全是纯文本字符串，合并安全。
+
+def _has_tool_use(m: dict[str, Any]) -> bool:
+    c = m.get("content")
+    return (m.get("role") == "assistant" and isinstance(c, list)
+            and any(isinstance(p, dict) and p.get("type") == "tool_use" for p in c))
+
+
+def _sanitize_context(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """保证回放给模型的上下文是合法的 agent loop：
+
+    - 必须从"真实用户文本"开头，不能从半截工具交换（tool_result / 悬空 tool_use）中间起头；
+    - 结尾不能是"有 tool_use 却没紧跟 tool_result"的悬空助手消息（异常残留），否则 API 会报错。
     """
-    merged: list[dict[str, str]] = []
+    while history and not _is_user_text(history[0]):
+        history = history[1:]
+    while history and _has_tool_use(history[-1]):
+        history = history[:-1]
+    return history
+
+
+def _merge_adjacent(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """合并相邻同角色的【纯文本】消息（系统事件/主动推送会插入连续同角色文本，部分 provider 不接受）。
+
+    带 tool_use / tool_result 的结构化消息不参与合并——它们的配对语义必须原样保留。
+    """
+    merged: list[dict[str, Any]] = []
     for m in history:
-        if merged and merged[-1].get("role") == m.get("role"):
-            merged[-1]["content"] = f"{merged[-1]['content']}\n{m['content']}"
+        if (merged and merged[-1].get("role") == m.get("role")
+                and isinstance(merged[-1].get("content"), str) and isinstance(m.get("content"), str)):
+            merged[-1] = {"role": m["role"], "content": f"{merged[-1]['content']}\n{m['content']}"}
         else:
             merged.append(dict(m))
     return merged
+
+
+def _cap_text(s: Any, cap: int = 2000) -> Any:
+    """持久化工具结果时给单条内容封顶，避免 search 等大结果把历史撑爆（当轮仍用完整结果）。"""
+    if isinstance(s, str) and len(s) > cap:
+        return s[:cap] + "…（已截断）"
+    return s
 
 
 TOOL_SPECS: list[ToolSpec] = [
@@ -384,6 +415,7 @@ EXPENSE_TOOL_SPECS = [
                 "category": {"type": "string", "description": "分类"},
                 "note": {"type": "string"},
                 "spent_at": {"type": "string", "description": "YYYY-MM-DD HH:MM:SS"},
+                "confirm_duplicate": {"type": "boolean", "description": "确认这是与刚记的相同的另一笔，绕过防重"},
             },
             "additionalProperties": False,
         },
@@ -642,6 +674,10 @@ class IntentRouter:
                 if tu["name"] in ("search_web", "read_url"):
                     needs_llm_summary = True
 
+            # 把这一轮工具调用（assistant 的 tool_use + 工具结果）持久化，形成可回放的 agent loop。
+            # 下一轮模型就能看见"自己刚调了什么、拿到了什么"，而不是只凭最后那句话回忆——避免重复记账之类的幻觉。
+            self._persist_tool_round(owner_user_id, resp.content, tool_results)
+
             QUICK_REPLY_TOOLS = {"create_job", "update_job"}
             # 顺序型模型一次只建一个；若像多任务，跳过短路让它把剩下的接着建完。
             if (not needs_llm_summary and len(tool_uses) == 1
@@ -657,15 +693,23 @@ class IntentRouter:
         self._store.append_message(owner_user_id, "assistant", fallback, account_id=self._account_id)
         return fallback
 
+    def _persist_tool_round(self, owner_user_id: str, assistant_content: Any,
+                            tool_results: list[dict[str, Any]]) -> None:
+        """持久化一轮 agent loop：assistant 的 tool_use(+文本) 与对应工具结果（结果封顶防膨胀）。"""
+        self._store.append_message(owner_user_id, "assistant", assistant_content,
+                                   account_id=self._account_id)
+        capped = [{**tr, "content": _cap_text(tr.get("content", ""))} for tr in tool_results]
+        self._store.append_message(owner_user_id, "user", capped, account_id=self._account_id)
+
     def _tz(self) -> ZoneInfo:
         return ZoneInfo(self._scheduler.tz)
 
     def _build_context(self, owner_user_id: str) -> list[dict[str, str]]:
         """Build conversation history within token budget."""
         if not self._context_length:
-            return _merge_adjacent(self._store.get_history(
+            return _merge_adjacent(_sanitize_context(self._store.get_history(
                 owner_user_id, limit=FALLBACK_HISTORY_LIMIT,
-                account_id=self._account_id or None))
+                account_id=self._account_id or None)))
 
         history = self._store.get_history(owner_user_id, limit=self._history_limit,
                                           account_id=self._account_id or None)
@@ -689,10 +733,7 @@ class IntentRouter:
             idx += 1
         history = history[idx:]
 
-        while history and history[0].get("role") != "user":
-            history = history[1:]
-
-        return _merge_adjacent(history)
+        return _merge_adjacent(_sanitize_context(history))
 
     def _system_prompt(self, owner_user_id: str, is_first: bool = False) -> str:
         prefs = self._store.get_prefs(owner_user_id, account_id=self._account_id)
@@ -1058,6 +1099,18 @@ class IntentRouter:
         if not item:
             return _err("买了啥 / 花在哪不能为空")
         tz = self._tz()
+        if not args.get("confirm_duplicate"):
+            now_ts = int(datetime.now(tz).timestamp())
+            dup = self._store.find_recent_duplicate(
+                owner_user_id, self._account_id, item, amount_cents,
+                now_ts - DUP_WINDOW_SECONDS,
+            )
+            if dup is not None:
+                return _ok(
+                    {"possible_duplicate": True, "existing": _expense_to_brief(dup, tz)},
+                    note=f"几分钟前刚记过一笔相同的「{item} {_fmt_yuan(amount_cents)}」，已自动防重、没重复记。"
+                         "确实是又花了一笔就带 confirm_duplicate=true 再记。",
+                )
         e = Expense(
             id=new_expense_id(), owner_user_id=owner_user_id, amount_cents=amount_cents,
             item=item, category=str(args.get("category", "")).strip(),

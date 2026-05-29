@@ -17,6 +17,8 @@ from .storage import Expense
 LARGE_EXPENSE_CENTS = 300_00
 # 当天累计 ≥ ¥500 时，当晚主动推送一条提醒
 DAILY_NUDGE_CENTS = 500_00
+# 同名同额、记录间隔在这个秒数内，视为疑似重复记账（防 LLM 误操作 / 瞬间重复触发）
+DUP_WINDOW_SECONDS = 300
 
 
 def yuan_to_cents(amount: Any) -> int:

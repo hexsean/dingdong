@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS chat_history (
     owner_user_id TEXT NOT NULL,
     role          TEXT NOT NULL,
     content       TEXT NOT NULL,
+    structured    INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_history(owner_user_id, created_at);
@@ -250,9 +251,10 @@ class JobStore:
         cols_ch = {r[1] for r in self._conn.execute("PRAGMA table_info(chat_history)").fetchall()}
         needs_jobs = cols and "account_id" not in cols
         needs_chat = cols_ch and "account_id" not in cols_ch
-        if not needs_jobs and not needs_chat:
+        needs_struct = cols_ch and "structured" not in cols_ch
+        if not needs_jobs and not needs_chat and not needs_struct:
             return
-        log.info("migrating: adding account_id columns")
+        log.info("migrating: adding columns (account_id / structured)")
         self._conn.execute("BEGIN")
         try:
             if needs_jobs:
@@ -263,6 +265,8 @@ class JobStore:
                 self._conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chat_account ON chat_history(account_id, owner_user_id, created_at)"
                 )
+            if needs_struct:
+                self._conn.execute("ALTER TABLE chat_history ADD COLUMN structured INTEGER NOT NULL DEFAULT 0")
             self._conn.execute("COMMIT")
         except Exception:
             self._conn.execute("ROLLBACK")
@@ -553,33 +557,52 @@ class JobStore:
             cur = self._conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
         return cur.rowcount > 0
 
+    def find_recent_duplicate(self, owner_user_id: str, account_id: str, item: str,
+                              amount_cents: int, since_created: int) -> Expense | None:
+        """查 since_created（epoch 秒）之后、同 owner 同名同额的最近一笔，用于防止瞬间重复记账。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM expenses WHERE owner_user_id = ? AND account_id = ? "
+                "AND item = ? AND amount_cents = ? AND created_at >= ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (owner_user_id, account_id, item, amount_cents, since_created),
+            ).fetchone()
+        return Expense.from_row(row) if row else None
+
     # ── chat history ──
 
-    def append_message(self, owner_user_id: str, role: str, content: str,
-                       account_id: str = "") -> None:
+    def append_message(self, owner_user_id: str, role: str,
+                       content: str | list[dict[str, Any]], account_id: str = "") -> None:
+        """content 可为纯文本，或统一格式的内容块列表（含 tool_use / tool_result，用于回放 agent loop）。"""
+        if isinstance(content, str):
+            text, structured = content, 0
+        else:
+            text, structured = json.dumps(content, ensure_ascii=False), 1
         with self._lock:
             self._conn.execute(
-                "INSERT INTO chat_history (account_id, owner_user_id, role, content, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (account_id, owner_user_id, role, content, int(time.time())),
+                "INSERT INTO chat_history (account_id, owner_user_id, role, content, structured, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (account_id, owner_user_id, role, text, structured, int(time.time())),
             )
 
     def get_history(self, owner_user_id: str, limit: int = 20,
-                    account_id: str | None = None) -> list[dict[str, str]]:
+                    account_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             if account_id is not None:
                 rows = self._conn.execute(
-                    "SELECT role, content FROM chat_history "
+                    "SELECT role, content, structured FROM chat_history "
                     "WHERE account_id = ? AND owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
                     (account_id, owner_user_id, limit),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
-                    "SELECT role, content FROM chat_history "
+                    "SELECT role, content, structured FROM chat_history "
                     "WHERE owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
                     (owner_user_id, limit),
                 ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        return [{"role": r["role"],
+                 "content": json.loads(r["content"]) if r["structured"] else r["content"]}
+                for r in reversed(rows)]
 
     def clear_history(self, owner_user_id: str, account_id: str | None = None) -> int:
         with self._lock:
