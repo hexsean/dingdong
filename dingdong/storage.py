@@ -463,7 +463,10 @@ class JobStore:
             c2 = self._conn.execute(
                 "UPDATE chat_history SET account_id = ? WHERE account_id = ''", (account_id,)
             )
-        return c1.rowcount + c2.rowcount
+            c3 = self._conn.execute(
+                "UPDATE expenses SET account_id = ? WHERE account_id = ''", (account_id,)
+            )
+        return c1.rowcount + c2.rowcount + c3.rowcount
 
     # ── expenses ──
 

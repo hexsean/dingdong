@@ -72,6 +72,7 @@ class Server:
         self._start_active_accounts()
         self._scheduler.start()
         self._register_update_check()
+        self._register_expense_reports()
         self._start_restart_watcher()
         self._notify_update_result_on_startup()
         with self._runners_lock:
@@ -331,6 +332,39 @@ class Server:
             if runner.send_to_user(user_id, f"更新失败：{message}。", context_token):
                 write_update_result(self._cfg.data_dir, status="failed",
                                     target_version=target, message=message, notified="1")
+
+    # ── expense reports ──
+
+    def _register_expense_reports(self) -> None:
+        from zoneinfo import ZoneInfo
+        from .expense_reporter import register_reports
+        tz = ZoneInfo(self._cfg.scheduler_tz)
+        register_reports(self._scheduler._scheduler, tz,
+                         self._expense_report_daily, self._expense_report_weekly,
+                         self._expense_report_monthly)
+        log.info("expense reports scheduled (daily/weekly/monthly)")
+
+    def _expense_report_daily(self) -> None:
+        self._fan_out_expense_report("today", nudge_only=True)
+
+    def _expense_report_weekly(self) -> None:
+        self._fan_out_expense_report("week")
+
+    def _expense_report_monthly(self) -> None:
+        self._fan_out_expense_report("last_month")
+
+    def _fan_out_expense_report(self, period: str, nudge_only: bool = False) -> None:
+        from .expense_reporter import ExpenseReporter
+        with self._runners_lock:
+            runners = list(self._runners.items())
+        for account_id, runner in runners:
+            try:
+                ExpenseReporter(
+                    self._llm, self._store, self._cfg.scheduler_tz,
+                    account_id=account_id, send=runner.send_to_user,
+                ).run(period, nudge_only)
+            except Exception:
+                log.exception("expense report failed for account %s", account_id)
 
     # ── shutdown ──
 

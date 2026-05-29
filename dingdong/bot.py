@@ -93,6 +93,7 @@ class Bot:
         self._install_signal_handlers()
         self._scheduler.start()
         self._register_update_check()
+        self._register_expense_reports()
         self._start_restart_watcher()
         self._notify_update_result_on_startup()
         log.info("v%s online; entering long-poll loop", local_version())
@@ -274,6 +275,18 @@ class Bot:
             replace_existing=True,
             next_run_time=first_run,
         )
+
+    def _register_expense_reports(self) -> None:
+        from zoneinfo import ZoneInfo
+        from .expense_reporter import ExpenseReporter, register_reports
+        tz = ZoneInfo(self._cfg.scheduler_tz)
+        reporter = ExpenseReporter(
+            self._llm, self._store, self._cfg.scheduler_tz,
+            account_id="", send=self._client.safe_send_text,
+        )
+        register_reports(self._scheduler._scheduler, tz,
+                         reporter.run_daily, reporter.run_weekly, reporter.run_monthly)
+        log.info("expense reports scheduled (daily/weekly/monthly)")
 
     def _check_update(self) -> None:
         if is_disabled(self._cfg.data_dir):

@@ -11,10 +11,21 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .expense import (
+    LARGE_EXPENSE_CENTS,
+    aggregate_expenses as _aggregate_expenses,
+    expense_to_brief as _expense_to_brief,
+    fmt_yuan as _fmt_yuan,
+    parse_day_end as _parse_day_end,
+    parse_day_start as _parse_day_start,
+    parse_when as _parse_when,
+    period_range as _period_range,
+    yuan_to_cents as _yuan_to_cents,
+)
 from .llm import LLMProvider, ToolSpec
 from .scheduler import ScheduleSpecError, Scheduler, build_trigger
 from .search import is_available as search_available, search as exa_search, read_url as exa_read_url
@@ -37,9 +48,6 @@ RESPONSE_TOKEN_BUDGET = 2048
 TOOL_OVERHEAD_TOKENS = 200
 TOOL_ROUND_RESERVE = 4000
 FALLBACK_HISTORY_LIMIT = 20
-
-# 记账：单笔金额 ≥ ¥300 触发"拷问"互动（趣味用，内置默认值）
-LARGE_EXPENSE_CENTS = 300_00
 
 
 def _is_cjk(c: str) -> bool:
@@ -220,101 +228,6 @@ def _merge_adjacent(history: list[dict[str, str]]) -> list[dict[str, str]]:
     return merged
 
 
-# ── 记账辅助 ────────────────────────────────────────────────
-
-
-def _yuan_to_cents(amount: Any) -> int:
-    try:
-        cents = round(float(amount) * 100)
-    except (TypeError, ValueError):
-        raise ValueError("金额无法识别")
-    if cents <= 0:
-        raise ValueError("金额需大于 0")
-    return int(cents)
-
-
-def _fmt_yuan(cents: int) -> str:
-    if cents % 100 == 0:
-        return f"¥{cents // 100}"
-    return f"¥{cents / 100:.2f}"
-
-
-def _parse_when(s: Any, tz: ZoneInfo) -> int:
-    """解析 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD'，返回 epoch 秒；空=现在。"""
-    text = s.strip() if isinstance(s, str) else ""
-    if not text:
-        return int(datetime.now(tz).timestamp())
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        raise ValueError(f"时间格式无法识别: {text}")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=tz)
-    return int(dt.timestamp())
-
-
-def _parse_day_start(s: Any, tz: ZoneInfo) -> int | None:
-    text = s.strip() if isinstance(s, str) else ""
-    if not text:
-        return None
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        raise ValueError(f"日期格式无法识别: {text}")
-    dt = dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
-    return int(dt.timestamp())
-
-
-def _parse_day_end(s: Any, tz: ZoneInfo) -> int | None:
-    start = _parse_day_start(s, tz)
-    return None if start is None else start + 86400  # 次日 0 点，作为 exclusive 上界
-
-
-def _period_range(period: str, tz: ZoneInfo) -> tuple[int, int, str]:
-    """返回 (since_ts, until_ts, 中文标签)，覆盖 today/week/month。"""
-    now = datetime.now(tz)
-    start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if period == "today":
-        since, label = start_today, "今天"
-    elif period == "week":
-        since, label = start_today - timedelta(days=now.weekday()), "本周"
-    elif period == "month":
-        since, label = start_today.replace(day=1), "本月"
-    else:
-        raise ValueError("period 须为 today/week/month")
-    until = now + timedelta(seconds=1)
-    return int(since.timestamp()), int(until.timestamp()), label
-
-
-def _expense_to_brief(e: Expense, tz: ZoneInfo) -> dict[str, Any]:
-    dt = datetime.fromtimestamp(e.spent_at, tz)
-    return {
-        "id": e.id[:8], "amount": _fmt_yuan(e.amount_cents), "item": e.item,
-        "category": e.category, "note": e.note, "spent_at": dt.strftime("%Y-%m-%d %H:%M"),
-    }
-
-
-def _aggregate_expenses(expenses: list[Expense], tz: ZoneInfo) -> dict[str, Any]:
-    total = sum(e.amount_cents for e in expenses)
-    by_cat: dict[str, int] = {}
-    by_day: dict[str, int] = {}
-    for e in expenses:
-        cat = e.category or "其他"
-        by_cat[cat] = by_cat.get(cat, 0) + e.amount_cents
-        day = datetime.fromtimestamp(e.spent_at, tz).strftime("%m-%d")
-        by_day[day] = by_day.get(day, 0) + e.amount_cents
-    top = sorted(expenses, key=lambda e: e.amount_cents, reverse=True)[:5]
-    return {
-        "total": _fmt_yuan(total),
-        "count": len(expenses),
-        "by_category": [{"category": c, "amount": _fmt_yuan(v)}
-                        for c, v in sorted(by_cat.items(), key=lambda kv: kv[1], reverse=True)],
-        "top_items": [{"item": e.item, "amount": _fmt_yuan(e.amount_cents), "category": e.category}
-                      for e in top],
-        "by_day": [{"day": d, "amount": _fmt_yuan(v)} for d, v in sorted(by_day.items())],
-    }
-
-
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         name="get_current_time",
@@ -474,11 +387,13 @@ EXPENSE_TOOL_SPECS = [
     ),
     ToolSpec(
         name="list_expenses",
-        description="查询开销明细。period 取 today/week/month，或用 since/until 指定范围（YYYY-MM-DD）；可按 category 过滤。",
+        description="查询开销明细。period 取 today/yesterday/week/last_week/month/last_month，"
+                    "或用 since/until 指定范围（YYYY-MM-DD）；可按 category 过滤。",
         input_schema={
             "type": "object",
             "properties": {
-                "period": {"type": "string", "enum": ["today", "week", "month"]},
+                "period": {"type": "string",
+                           "enum": ["today", "yesterday", "week", "last_week", "month", "last_month"]},
                 "since": {"type": "string", "description": "YYYY-MM-DD"},
                 "until": {"type": "string", "description": "YYYY-MM-DD"},
                 "category": {"type": "string"},
@@ -489,10 +404,11 @@ EXPENSE_TOOL_SPECS = [
     ToolSpec(
         name="summarize_expenses",
         description="汇总某段时间的开销，返回总额、按分类金额、最大几笔、每日分布等数字，用于生成日/周/月总结。"
-                    "period 取 today/week/month。数字以返回为准，不要自己编。",
+                    "period 取 today/yesterday/week/last_week/month/last_month。数字以返回为准，不要自己编。",
         input_schema={
             "type": "object", "required": ["period"],
-            "properties": {"period": {"type": "string", "enum": ["today", "week", "month"]}},
+            "properties": {"period": {"type": "string",
+                                      "enum": ["today", "yesterday", "week", "last_week", "month", "last_month"]}},
             "additionalProperties": False,
         },
     ),
