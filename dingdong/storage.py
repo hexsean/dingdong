@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS user_prefs (
     updated_at    INTEGER NOT NULL,
     PRIMARY KEY (account_id, owner_user_id)
 );
+
+CREATE TABLE IF NOT EXISTS expenses (
+    id            TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL DEFAULT '',
+    owner_user_id TEXT NOT NULL,
+    amount_cents  INTEGER NOT NULL,
+    item          TEXT NOT NULL,
+    category      TEXT NOT NULL DEFAULT '',
+    note          TEXT NOT NULL DEFAULT '',
+    context_token TEXT NOT NULL DEFAULT '',
+    spent_at      INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_owner ON expenses(owner_user_id, spent_at);
+CREATE INDEX IF NOT EXISTS idx_expenses_account ON expenses(account_id, owner_user_id, spent_at);
 """
 
 VALID_SCHEDULE_KINDS = {"cron", "interval", "date"}
@@ -167,6 +182,43 @@ def new_job_id() -> str:
     return uuid.uuid4().hex
 
 
+# ── Expense ─────────────────────────────────────────────────
+
+
+@dataclass
+class Expense:
+    id: str
+    owner_user_id: str
+    amount_cents: int
+    item: str
+    category: str = ""
+    note: str = ""
+    context_token: str = ""
+    account_id: str = ""
+    spent_at: int = field(default_factory=lambda: int(time.time()))
+    created_at: int = field(default_factory=lambda: int(time.time()))
+
+    def to_row(self) -> tuple[Any, ...]:
+        return (
+            self.id, self.account_id, self.owner_user_id, self.amount_cents,
+            self.item, self.category, self.note, self.context_token,
+            self.spent_at, self.created_at,
+        )
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Expense:
+        return cls(
+            id=row["id"], account_id=row["account_id"], owner_user_id=row["owner_user_id"],
+            amount_cents=row["amount_cents"], item=row["item"], category=row["category"],
+            note=row["note"], context_token=row["context_token"],
+            spent_at=row["spent_at"], created_at=row["created_at"],
+        )
+
+
+def new_expense_id() -> str:
+    return uuid.uuid4().hex
+
+
 # ── Store ───────────────────────────────────────────────────
 
 
@@ -254,6 +306,7 @@ class JobStore:
                 self._conn.execute("DELETE FROM jobs WHERE account_id = ?", (account_id,))
                 self._conn.execute("DELETE FROM chat_history WHERE account_id = ?", (account_id,))
                 self._conn.execute("DELETE FROM user_prefs WHERE account_id = ?", (account_id,))
+                self._conn.execute("DELETE FROM expenses WHERE account_id = ?", (account_id,))
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
@@ -411,6 +464,79 @@ class JobStore:
                 "UPDATE chat_history SET account_id = ? WHERE account_id = ''", (account_id,)
             )
         return c1.rowcount + c2.rowcount
+
+    # ── expenses ──
+
+    def insert_expense(self, e: Expense) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO expenses (id,account_id,owner_user_id,amount_cents,item,"
+                "category,note,context_token,spent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                e.to_row(),
+            )
+
+    def get_expense(self, expense_id: str) -> Expense | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM expenses WHERE id = ?", (expense_id,)).fetchone()
+        return Expense.from_row(row) if row else None
+
+    def get_expense_by_prefix(self, prefix: str, account_id: str | None = None) -> Expense | None:
+        with self._lock:
+            if account_id is not None:
+                rows = self._conn.execute(
+                    "SELECT * FROM expenses WHERE id LIKE ? AND account_id = ? LIMIT 2",
+                    (f"{prefix}%", account_id),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM expenses WHERE id LIKE ? LIMIT 2", (f"{prefix}%",)
+                ).fetchall()
+        if len(rows) == 1:
+            return Expense.from_row(rows[0])
+        return None
+
+    def list_expenses(self, owner_user_id: str | None = None, account_id: str | None = None,
+                      since: int | None = None, until: int | None = None,
+                      category: str | None = None, limit: int | None = None) -> list[Expense]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_user_id is not None:
+            clauses.append("owner_user_id = ?"); params.append(owner_user_id)
+        if account_id is not None:
+            clauses.append("account_id = ?"); params.append(account_id)
+        if since is not None:
+            clauses.append("spent_at >= ?"); params.append(since)
+        if until is not None:
+            clauses.append("spent_at < ?"); params.append(until)
+        if category:
+            clauses.append("category = ?"); params.append(category)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"SELECT * FROM expenses{where} ORDER BY spent_at DESC"
+        if limit is not None:
+            sql += " LIMIT ?"; params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [Expense.from_row(r) for r in rows]
+
+    def update_expense_fields(self, expense_id: str, **fields: Any) -> Expense | None:
+        if not fields:
+            return self.get_expense(expense_id)
+        allowed = {"amount_cents", "item", "category", "note", "spent_at"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"cannot update expense fields: {bad}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE expenses SET {sets} WHERE id = ?",
+                (*fields.values(), expense_id),
+            )
+        return self.get_expense(expense_id)
+
+    def delete_expense(self, expense_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+        return cur.rowcount > 0
 
     # ── chat history ──
 

@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -24,7 +24,10 @@ from .self_update import (
     trigger_watchtower_update,
     update_configured,
 )
-from .storage import Job, JobStore, VALID_SCHEDULE_KINDS, describe_schedule, new_job_id
+from .storage import (
+    Expense, Job, JobStore, VALID_SCHEDULE_KINDS,
+    describe_schedule, new_expense_id, new_job_id,
+)
 from .updater import is_disabled, is_newer_version, local_version, remote_version, set_disabled
 
 log = logging.getLogger(__name__)
@@ -34,6 +37,9 @@ RESPONSE_TOKEN_BUDGET = 2048
 TOOL_OVERHEAD_TOKENS = 200
 TOOL_ROUND_RESERVE = 4000
 FALLBACK_HISTORY_LIMIT = 20
+
+# 记账：单笔金额 ≥ ¥300 触发"拷问"互动（趣味用，内置默认值）
+LARGE_EXPENSE_CENTS = 300_00
 
 
 def _is_cjk(c: str) -> bool:
@@ -129,9 +135,18 @@ INTENT_SYSTEM_PROMPT = """\
 - 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
 - list_jobs 只返回正在生效的任务；一次性(date)任务执行完后不在其中。要核对某个一次性提醒是否已触发过，用 list_done_jobs 查最近完成记录，或看对话历史里「定时任务…已于…触发」的记录。已执行过就别说没找到或提议重建
 
+记账（趣味优先，可靠次之，实用垫底）：
+- 用户说买了啥 / 花了多少钱，必须调 add_expense 真的记下来；和建任务一样严格，别只嘴上说"记好了"却没调用。一条消息说了多笔就多次调用，各记一笔。
+- 金额默认单位元。只有用户指明了别的时间（昨天、中午…）才传 spent_at，否则记现在。category 自己归类（餐饮/交通/购物/娱乐/日用/医疗/其他等）。
+- 记完别干巴巴回"已记录"：用一句打趣 / 调侃 / 假装责怪的话回应，顺手把记下的金额和东西复述一遍，方便用户发现记错。可以拿 add_expense 返回的 today_total / today_count 抖机灵（如"今天第 3 杯奶茶了"）。
+- add_expense 返回 large=true（大额）时，追加一句"拷问"——这钱花得值不值之类，增加戏剧性；但记录已经存下了，别因为要拷问就不记、也别要求用户再确认。
+- 查明细用 list_expenses；要日/周/月总结或分析用 summarize_expenses，基于它返回的数字写一段带吐槽的回顾（占比、最能花的那笔、哪天花得最猛），数字一律以工具返回为准、绝不编造。
+- 记错了用 update_expense 改、delete_expense 删。
+- 吐槽和打趣的火力跟随你的人设（persona），默认机灵、损得友善，别刻薄、别说教。
+
 长期偏好（称呼与风格）：当用户表达"想怎么称呼你 / 给你起个名"、"希望你怎么称呼TA"、"希望你是什么性格/风格/语气"时，调用 set_profile 记住。只传发生变化的项（会整项覆盖），其余不传保持不变；要恢复默认就把该项设为空字符串。除非用户提起，别主动反复追问这些。
 
-用户问你能做什么，可以热情点、分几条说（用 [下一条]）：你能帮他定各种定时提醒和任务，到点用微信戳他；顺带提一句发「我有哪些任务」看列表、「清空对话」重置记录。
+用户问你能做什么，可以热情点、分几条说（用 [下一条]）：你能帮他定各种定时提醒和任务，到点用微信戳他；也能帮他记账——说一句"买了啥、花了多少"就记下，还能出带吐槽的日/周/月账单；顺带提一句发「我有哪些任务」看列表、「清空对话」重置记录。
 
 任务字段：name(名称) goal(目标描述) schedule_kind(cron/interval/date)
 - cron: cron_expression 5字段
@@ -203,6 +218,101 @@ def _merge_adjacent(history: list[dict[str, str]]) -> list[dict[str, str]]:
         else:
             merged.append(dict(m))
     return merged
+
+
+# ── 记账辅助 ────────────────────────────────────────────────
+
+
+def _yuan_to_cents(amount: Any) -> int:
+    try:
+        cents = round(float(amount) * 100)
+    except (TypeError, ValueError):
+        raise ValueError("金额无法识别")
+    if cents <= 0:
+        raise ValueError("金额需大于 0")
+    return int(cents)
+
+
+def _fmt_yuan(cents: int) -> str:
+    if cents % 100 == 0:
+        return f"¥{cents // 100}"
+    return f"¥{cents / 100:.2f}"
+
+
+def _parse_when(s: Any, tz: ZoneInfo) -> int:
+    """解析 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD'，返回 epoch 秒；空=现在。"""
+    text = s.strip() if isinstance(s, str) else ""
+    if not text:
+        return int(datetime.now(tz).timestamp())
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(f"时间格式无法识别: {text}")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return int(dt.timestamp())
+
+
+def _parse_day_start(s: Any, tz: ZoneInfo) -> int | None:
+    text = s.strip() if isinstance(s, str) else ""
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(f"日期格式无法识别: {text}")
+    dt = dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
+    return int(dt.timestamp())
+
+
+def _parse_day_end(s: Any, tz: ZoneInfo) -> int | None:
+    start = _parse_day_start(s, tz)
+    return None if start is None else start + 86400  # 次日 0 点，作为 exclusive 上界
+
+
+def _period_range(period: str, tz: ZoneInfo) -> tuple[int, int, str]:
+    """返回 (since_ts, until_ts, 中文标签)，覆盖 today/week/month。"""
+    now = datetime.now(tz)
+    start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "today":
+        since, label = start_today, "今天"
+    elif period == "week":
+        since, label = start_today - timedelta(days=now.weekday()), "本周"
+    elif period == "month":
+        since, label = start_today.replace(day=1), "本月"
+    else:
+        raise ValueError("period 须为 today/week/month")
+    until = now + timedelta(seconds=1)
+    return int(since.timestamp()), int(until.timestamp()), label
+
+
+def _expense_to_brief(e: Expense, tz: ZoneInfo) -> dict[str, Any]:
+    dt = datetime.fromtimestamp(e.spent_at, tz)
+    return {
+        "id": e.id[:8], "amount": _fmt_yuan(e.amount_cents), "item": e.item,
+        "category": e.category, "note": e.note, "spent_at": dt.strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+def _aggregate_expenses(expenses: list[Expense], tz: ZoneInfo) -> dict[str, Any]:
+    total = sum(e.amount_cents for e in expenses)
+    by_cat: dict[str, int] = {}
+    by_day: dict[str, int] = {}
+    for e in expenses:
+        cat = e.category or "其他"
+        by_cat[cat] = by_cat.get(cat, 0) + e.amount_cents
+        day = datetime.fromtimestamp(e.spent_at, tz).strftime("%m-%d")
+        by_day[day] = by_day.get(day, 0) + e.amount_cents
+    top = sorted(expenses, key=lambda e: e.amount_cents, reverse=True)[:5]
+    return {
+        "total": _fmt_yuan(total),
+        "count": len(expenses),
+        "by_category": [{"category": c, "amount": _fmt_yuan(v)}
+                        for c, v in sorted(by_cat.items(), key=lambda kv: kv[1], reverse=True)],
+        "top_items": [{"item": e.item, "amount": _fmt_yuan(e.amount_cents), "category": e.category}
+                      for e in top],
+        "by_day": [{"day": d, "amount": _fmt_yuan(v)} for d, v in sorted(by_day.items())],
+    }
 
 
 TOOL_SPECS: list[ToolSpec] = [
@@ -343,12 +453,86 @@ SEARCH_TOOL_SPECS = [
     ),
 ]
 
+EXPENSE_TOOL_SPECS = [
+    ToolSpec(
+        name="add_expense",
+        description="记一笔开销。用户说买了什么/花了多少钱时调用，真的把它记下来。"
+                    "amount 单位元；一条消息说了多笔就多次调用，各记一笔。"
+                    "category 自己归类（如 餐饮/交通/购物/娱乐/日用/医疗/其他）。"
+                    "spent_at 仅当用户指明了别的时间（如昨天、中午）才传，格式 'YYYY-MM-DD HH:MM:SS'，否则不传=现在。",
+        input_schema={
+            "type": "object", "required": ["amount", "item"],
+            "properties": {
+                "amount": {"type": "number", "description": "金额（元）"},
+                "item": {"type": "string", "description": "买了啥/花在哪"},
+                "category": {"type": "string", "description": "分类"},
+                "note": {"type": "string"},
+                "spent_at": {"type": "string", "description": "YYYY-MM-DD HH:MM:SS"},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    ToolSpec(
+        name="list_expenses",
+        description="查询开销明细。period 取 today/week/month，或用 since/until 指定范围（YYYY-MM-DD）；可按 category 过滤。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "period": {"type": "string", "enum": ["today", "week", "month"]},
+                "since": {"type": "string", "description": "YYYY-MM-DD"},
+                "until": {"type": "string", "description": "YYYY-MM-DD"},
+                "category": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    ToolSpec(
+        name="summarize_expenses",
+        description="汇总某段时间的开销，返回总额、按分类金额、最大几笔、每日分布等数字，用于生成日/周/月总结。"
+                    "period 取 today/week/month。数字以返回为准，不要自己编。",
+        input_schema={
+            "type": "object", "required": ["period"],
+            "properties": {"period": {"type": "string", "enum": ["today", "week", "month"]}},
+            "additionalProperties": False,
+        },
+    ),
+    ToolSpec(
+        name="update_expense",
+        description="修改某笔开销（记错时）。expense_id 支持完整 id 或前缀。只传需要改的字段。",
+        input_schema={
+            "type": "object", "required": ["expense_id"],
+            "properties": {
+                "expense_id": {"type": "string", "description": "开销 id 或前缀"},
+                "amount": {"type": "number"},
+                "item": {"type": "string"},
+                "category": {"type": "string"},
+                "note": {"type": "string"},
+                "spent_at": {"type": "string", "description": "YYYY-MM-DD HH:MM:SS"},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    ToolSpec(
+        name="delete_expense",
+        description="删除某笔开销。expense_id 支持完整 id 或前缀。",
+        input_schema={
+            "type": "object", "required": ["expense_id"],
+            "properties": {"expense_id": {"type": "string", "description": "开销 id 或前缀"}},
+            "additionalProperties": False,
+        },
+    ),
+]
+
 
 def _tool_status(name: str, args: dict[str, Any]) -> str | None:
     if name == "search_web":
         return f"搜索「{args.get('query', '')}」..."
     if name == "create_job":
         return f"创建「{args.get('name', '任务')}」..."
+    if name == "add_expense":
+        return f"记一笔「{args.get('item', '')}」..."
+    if name == "summarize_expenses":
+        return "算账中..."
     return None
 
 
@@ -501,7 +685,7 @@ class IntentRouter:
                 last_user["content"] = content_parts
         wants_multi = _looks_multi_task(text)
         for round_idx in range(MAX_TOOL_ROUNDS):
-            tools = list(TOOL_SPECS)
+            tools = list(TOOL_SPECS) + list(EXPENSE_TOOL_SPECS)
             if search_available():
                 tools.extend(SEARCH_TOOL_SPECS)
             resp = self._llm.chat(
@@ -569,7 +753,7 @@ class IntentRouter:
         if not history:
             return history
 
-        tools = list(TOOL_SPECS)
+        tools = list(TOOL_SPECS) + list(EXPENSE_TOOL_SPECS)
         if search_available():
             tools.extend(SEARCH_TOOL_SPECS)
 
@@ -773,6 +957,16 @@ class IntentRouter:
                 return self._tool_run_now(args, owner_user_id)
             if name == "set_profile":
                 return self._tool_set_profile(args, owner_user_id)
+            if name == "add_expense":
+                return self._tool_add_expense(args, owner_user_id, context_token)
+            if name == "list_expenses":
+                return self._tool_list_expenses(args, owner_user_id)
+            if name == "summarize_expenses":
+                return self._tool_summarize_expenses(args, owner_user_id)
+            if name == "update_expense":
+                return self._tool_update_expense(args, owner_user_id)
+            if name == "delete_expense":
+                return self._tool_delete_expense(args, owner_user_id)
             if name == "search_web":
                 return self._tool_search_web(args)
             if name == "read_url":
@@ -936,6 +1130,103 @@ class IntentRouter:
             return _err("没有要更新的偏好")
         prefs = self._store.set_prefs(owner_user_id, account_id=self._account_id, **fields)
         return _ok({"profile": prefs, "changed": list(fields.keys())})
+
+    # ---------- expenses (记账) ----------
+
+    def _tool_add_expense(self, args: dict[str, Any], owner_user_id: str, context_token: str) -> str:
+        amount_cents = _yuan_to_cents(args.get("amount"))
+        item = str(args.get("item", "")).strip()
+        if not item:
+            return _err("买了啥 / 花在哪不能为空")
+        tz = self._tz()
+        e = Expense(
+            id=new_expense_id(), owner_user_id=owner_user_id, amount_cents=amount_cents,
+            item=item, category=str(args.get("category", "")).strip(),
+            note=str(args.get("note", "")).strip(), context_token=context_token,
+            account_id=self._account_id, spent_at=_parse_when(args.get("spent_at"), tz),
+        )
+        self._store.insert_expense(e)
+        since, until, _ = _period_range("today", tz)
+        today = self._store.list_expenses(owner_user_id=owner_user_id, account_id=self._account_id or None,
+                                          since=since, until=until)
+        today_total = sum(r.amount_cents for r in today)
+        return _ok({
+            "recorded": _expense_to_brief(e, tz),
+            "large": amount_cents >= LARGE_EXPENSE_CENTS,
+            "today_total": _fmt_yuan(today_total),
+            "today_count": len(today),
+        })
+
+    def _tool_list_expenses(self, args: dict[str, Any], owner_user_id: str) -> str:
+        tz = self._tz()
+        cat = (args.get("category") or "").strip() or None
+        period = args.get("period")
+        if period:
+            since, until, _ = _period_range(period, tz)
+        else:
+            since = _parse_day_start(args.get("since"), tz)
+            until = _parse_day_end(args.get("until"), tz)
+        rows = self._store.list_expenses(owner_user_id=owner_user_id, account_id=self._account_id or None,
+                                         since=since, until=until, category=cat, limit=100)
+        if not rows:
+            return _ok({"expenses": []}, note="这段时间还没有记账记录。")
+        total = sum(e.amount_cents for e in rows)
+        return _ok({"expenses": [_expense_to_brief(e, tz) for e in rows],
+                    "count": len(rows), "total": _fmt_yuan(total)})
+
+    def _tool_summarize_expenses(self, args: dict[str, Any], owner_user_id: str) -> str:
+        tz = self._tz()
+        try:
+            since, until, label = _period_range(args.get("period", ""), tz)
+        except ValueError as exc:
+            return _err(str(exc))
+        rows = self._store.list_expenses(owner_user_id=owner_user_id, account_id=self._account_id or None,
+                                         since=since, until=until)
+        if not rows:
+            return _ok({"period": label, "count": 0}, note=f"{label}还没有开销记录，钱包很安全。")
+        agg = _aggregate_expenses(rows, tz)
+        agg["period"] = label
+        return _ok(agg)
+
+    def _tool_update_expense(self, args: dict[str, Any], owner_user_id: str) -> str:
+        e = self._resolve_expense(args.get("expense_id", ""), owner_user_id)
+        if e is None:
+            return _err("没找到这笔记录")
+        fields: dict[str, Any] = {}
+        if "amount" in args:
+            fields["amount_cents"] = _yuan_to_cents(args["amount"])
+        for k in ("item", "category", "note"):
+            if k in args:
+                fields[k] = str(args[k]).strip()
+        if "spent_at" in args:
+            fields["spent_at"] = _parse_when(args["spent_at"], self._tz())
+        if not fields:
+            return _err("没有要修改的字段")
+        updated = self._store.update_expense_fields(e.id, **fields)
+        if updated is None:
+            return _err("修改失败")
+        return _ok({"updated": _expense_to_brief(updated, self._tz())})
+
+    def _tool_delete_expense(self, args: dict[str, Any], owner_user_id: str) -> str:
+        e = self._resolve_expense(args.get("expense_id", ""), owner_user_id)
+        if e is None:
+            return _err("没找到这笔记录")
+        self._store.delete_expense(e.id)
+        return _ok({"deleted": _expense_to_brief(e, self._tz())})
+
+    def _resolve_expense(self, raw_id: str, owner_user_id: str) -> Expense | None:
+        raw_id = (raw_id or "").strip()
+        if not raw_id:
+            return None
+        aid = self._account_id or None
+        e = self._store.get_expense(raw_id)
+        if e is None:
+            e = self._store.get_expense_by_prefix(raw_id, account_id=aid)
+        if e is None or e.owner_user_id != owner_user_id:
+            return None
+        if self._account_id and e.account_id != self._account_id:
+            return None
+        return e
 
     def _tool_search_web(self, args: dict[str, Any]) -> str:
         query = str(args.get("query", "")).strip()
