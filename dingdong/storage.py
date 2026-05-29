@@ -18,6 +18,18 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# 长期偏好默认值（用户未设定时用这些；设定后用用户的——覆盖关系）。
+# "有趣/毒舌打趣"是叮咚的默认风格，用户在 set_profile 里给了 persona 就完全按用户的来。
+DEFAULT_BOT_NAME = "叮咚"
+DEFAULT_PERSONA = (
+    "像个损友：机灵、爱吐槽爱打趣，毒舌但不刻薄；说话简短、口语、接地气，别像机器人念说明书。"
+    "记账时尤其爱调侃，遇到大额开销会假装心疼地拷问两句。"
+)
+
+# 系统到点自动发出的消息（定时任务触发、账单推送等）写进对话历史时的统一前缀，
+# 让 LLM 能把"系统自动发生过的事"与"用户指令 / 自己的回复"区分开，降低重复执行与幻觉。
+SYSTEM_EVENT_PREFIX = "（系统自动消息）"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
     id         TEXT PRIMARY KEY,

@@ -16,9 +16,9 @@ from datetime import datetime
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from .expense import DAILY_NUDGE_CENTS, aggregate_expenses, period_range
+from .expense import DAILY_NUDGE_CENTS, aggregate_expenses, fmt_yuan, period_range
 from .llm import LLMProvider
-from .storage import JobStore
+from .storage import DEFAULT_BOT_NAME, DEFAULT_PERSONA, SYSTEM_EVENT_PREFIX, JobStore
 
 log = logging.getLogger(__name__)
 
@@ -27,10 +27,11 @@ DAILY_HOUR = 21              # 每天 21:00 检查当天，高消费才提醒
 WEEKLY_DOW, WEEKLY_HOUR = "sun", 20   # 周日 20:00 出本周小结
 MONTHLY_DAY, MONTHLY_HOUR = 1, 20     # 每月 1 号 20:00 出上个月小结
 
+# 语气/风格交给 persona（用户设了用用户的，否则用默认的"损友"人设），这里只规定内容与结构。
 REPORTER_SYSTEM = """\
-你是叮咚，用户的记账搭子，毒舌但友善。根据给定的开销数据，写一段简短的回顾小结。
-要求：中文、口语、像微信朋友聊天；点出花得最多的类目、最大的一笔、值不值得；可以调侃但别刻薄、别说教、别长篇大论。
-直接输出消息内容，不要任何前缀，控制在 3 句以内。
+你是{bot_name}，用户的记账搭子。根据给定的开销数据，写一段简短的回顾小结。
+要求：中文、口语、像微信聊天；点出花得最多的类目、最大的一笔、值不值得；别长篇大论、别说教，控制在 3 句以内。
+直接输出消息内容，不要任何前缀。
 """
 
 # send(owner_user_id, text, context_token) -> bool
@@ -88,15 +89,23 @@ class ExpenseReporter:
                 continue
             ok = self._send(owner, text, ctx)
             log.info("expense %s report -> %s: %s", label, owner, "ok" if ok else "FAILED")
+            if ok:
+                try:
+                    self._store.append_message(
+                        owner, "assistant",
+                        f"{SYSTEM_EVENT_PREFIX}已给用户推送了{label}开销小结（共 {fmt_yuan(total)}）",
+                        account_id=self._account_id,
+                    )
+                except Exception:
+                    log.exception("failed to record expense report to history for %s", owner)
 
     def _generate(self, owner: str, label: str, rows: list) -> str:
         agg = aggregate_expenses(rows, self._tz)
         prefs = self._store.get_prefs(owner, account_id=self._account_id)
-        persona = (prefs.get("persona") or "").strip()
+        bot_name = (prefs.get("bot_name") or "").strip() or DEFAULT_BOT_NAME
+        persona = (prefs.get("persona") or "").strip() or DEFAULT_PERSONA
         title = (prefs.get("user_title") or "").strip()
-        system = REPORTER_SYSTEM
-        if persona:
-            system += f"\n你的性格/风格：{persona}"
+        system = REPORTER_SYSTEM.format(bot_name=bot_name) + f"\n语气/风格：{persona}"
         if title:
             system += f"\n称呼用户用「{title}」。"
         now = datetime.now(self._tz)

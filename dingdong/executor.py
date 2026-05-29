@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .ilink import ILinkClient
 from .llm import LLMProvider
-from .storage import Job, JobStore
+from .storage import Job, JobStore, SYSTEM_EVENT_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +70,11 @@ class JobExecutor:
         会误判成"没建成功"并提议重建。cron 同理记录；interval 跳过(可能高频刷历史)。
         """
         now = datetime.now(self._tz)
-        marker = f"[定时任务「{job.name}」已于 {now:%m-%d %H:%M} 触发]"
+        note = (f"{SYSTEM_EVENT_PREFIX}定时任务「{job.name}」已于 {now:%m-%d %H:%M} "
+                f"自动触发并提醒：{content}")
         try:
             self._store.append_message(
-                job.owner_user_id, "assistant", f"{marker}\n{content}",
-                account_id=job.account_id,
+                job.owner_user_id, "assistant", note, account_id=job.account_id,
             )
         except Exception:
             log.exception("failed to record push to history for job %s", job.id)

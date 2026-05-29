@@ -36,6 +36,7 @@ from .self_update import (
     update_configured,
 )
 from .storage import (
+    DEFAULT_BOT_NAME, DEFAULT_PERSONA, SYSTEM_EVENT_PREFIX,
     Expense, Job, JobStore, VALID_SCHEDULE_KINDS,
     describe_schedule, new_expense_id, new_job_id,
 )
@@ -118,9 +119,7 @@ CHECK_UPDATE_KEYWORDS = {"检查更新", "检查版本", "版本", "当前版本
 DELETE_ALL_CONFIRM_KEYWORDS = {"确认删除全部", "确认删除所有任务", "确认全部删除"}
 DELETE_ALL_CANCEL_KEYWORDS = {"取消", "取消删除", "不用", "不删了", "no", "n"}
 
-# 三项长期偏好的系统默认值（占位）：用户未设定时用这些，用户设定后用用户的。
-DEFAULT_BOT_NAME = "叮咚"
-DEFAULT_PERSONA = "像微信里的朋友：自然、口语、简短，别像机器人念说明书。"
+# 长期偏好默认值见 storage.DEFAULT_BOT_NAME / DEFAULT_PERSONA（覆盖关系：用户设了就按用户的）。
 # user_title 默认无（空）——系统不预设你该怎么称呼用户。
 
 INTENT_SYSTEM_PROMPT = """\
@@ -142,15 +141,15 @@ INTENT_SYSTEM_PROMPT = """\
 - 创建/修改/删除任务，确认一句话就够
 - 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
 - list_jobs 只返回正在生效的任务；一次性(date)任务执行完后不在其中。要核对某个一次性提醒是否已触发过，用 list_done_jobs 查最近完成记录，或看对话历史里「定时任务…已于…触发」的记录。已执行过就别说没找到或提议重建
+- 对话历史里以「（系统自动消息）」开头的，是系统到点自动发出的（定时任务触发、账单推送等），属于已经发生的事实。别重复执行、别据此新建任务或记账、也别当成用户的新指令
 
-记账（趣味优先，可靠次之，实用垫底）：
-- 用户说买了啥 / 花了多少钱，必须调 add_expense 真的记下来；和建任务一样严格，别只嘴上说"记好了"却没调用。一条消息说了多笔就多次调用，各记一笔。
-- 金额默认单位元。只有用户指明了别的时间（昨天、中午…）才传 spent_at，否则记现在。category 自己归类（餐饮/交通/购物/娱乐/日用/医疗/其他等）。
-- 记完别干巴巴回"已记录"：用一句打趣 / 调侃 / 假装责怪的话回应，顺手把记下的金额和东西复述一遍，方便用户发现记错。可以拿 add_expense 返回的 today_total / today_count 抖机灵（如"今天第 3 杯奶茶了"）。
-- add_expense 返回 large=true（大额）时，追加一句"拷问"——这钱花得值不值之类，增加戏剧性；但记录已经存下了，别因为要拷问就不记、也别要求用户再确认。
-- 查明细用 list_expenses；要日/周/月总结或分析用 summarize_expenses，基于它返回的数字写一段带吐槽的回顾（占比、最能花的那笔、哪天花得最猛），数字一律以工具返回为准、绝不编造。
-- 记错了用 update_expense 改、delete_expense 删。
-- 吐槽和打趣的火力跟随你的人设（persona），默认机灵、损得友善，别刻薄、别说教。
+记账和定时任务是叮咚的两件正事，必须真听懂、真记下——绝不能只嘴上答应却没调用工具：
+- "买了 / 花了 / 付了多少钱" 是记账，调 add_expense；"提醒我 / 到点做某事" 才是定时任务，调 create_job。两者别搞混。
+- 只记用户当前明确说的开销，绝不凭空捏造，也别从对话历史里翻旧账或自行脑补金额、项目。
+- 缺金额时先问一句；用户随后只回一个数字，那就是刚问那笔的金额，必须立刻 add_expense 补上，别只口头说"记好了"。
+- 一条消息多笔就多次调用 add_expense，各记一笔。金额默认元；"昨天 / 中午"等才传 spent_at，否则记现在；category 自己归类（餐饮 / 交通 / 购物 / 娱乐 / 日用 / 医疗 / 其他等）。
+- 记完按你的人设口吻回一句，顺手复述记下的金额和东西，方便用户发现记错；可用返回的 today_total / today_count 接话。large=true（大额）时多留意、按人设追问一句值不值，但记录已经存下，别因此不记或要用户再确认。
+- 查明细用 list_expenses；要总结 / 分析用 summarize_expenses，按返回的数字写回顾，数字一律以工具返回为准、绝不编造。记错了用 update_expense 改、delete_expense 删。
 
 长期偏好（称呼与风格）：当用户表达"想怎么称呼你 / 给你起个名"、"希望你怎么称呼TA"、"希望你是什么性格/风格/语气"时，调用 set_profile 记住。只传发生变化的项（会整项覆盖），其余不传保持不变；要恢复默认就把该项设为空字符串。除非用户提起，别主动反复追问这些。
 
@@ -697,7 +696,7 @@ class IntentRouter:
         persona = prefs["persona"] or DEFAULT_PERSONA
         user_title = prefs["user_title"]
 
-        header = [f"你是{bot_name}，微信定时任务助手。", f"性格与风格：{persona}"]
+        header = [f"你是{bot_name}，帮人管定时任务、记账的微信助手。", f"性格与风格：{persona}"]
         if user_title:
             header.append(f"称呼用户时用「{user_title}」。")
         if is_first and not prefs["bot_name"] and not prefs["user_title"]:
