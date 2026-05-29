@@ -36,7 +36,11 @@ def fmt_yuan(cents: int) -> str:
 
 
 def parse_when(s: Any, tz: ZoneInfo) -> int:
-    """解析 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD'，返回 epoch 秒；空=现在。"""
+    """解析 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD'，返回 epoch 秒；空=现在。
+
+    只给了日期没给时刻时，用当前时刻的几点几分补全（而非落到午夜），
+    免得过去日期的开销一律显示成"深夜"、丢掉时段信息。
+    """
     text = s.strip() if isinstance(s, str) else ""
     if not text:
         return int(datetime.now(tz).timestamp())
@@ -46,6 +50,9 @@ def parse_when(s: Any, tz: ZoneInfo) -> int:
         raise ValueError(f"时间格式无法识别: {text}")
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=tz)
+    if ":" not in text:  # 只有日期、没有时刻 → 用当前时刻补全
+        now = datetime.now(tz)
+        dt = dt.replace(hour=now.hour, minute=now.minute, second=now.second)
     return int(dt.timestamp())
 
 
@@ -104,15 +111,32 @@ def expense_to_brief(e: Expense, tz: ZoneInfo) -> dict[str, Any]:
     }
 
 
+def time_slot(hour: int) -> str:
+    """把小时映射成时段（对食品就近似早/午/晚餐与宵夜），用于总结里按时段吐槽。"""
+    if 5 <= hour < 11:
+        return "早上"
+    if 11 <= hour < 14:
+        return "中午"
+    if 14 <= hour < 18:
+        return "下午"
+    if 18 <= hour < 22:
+        return "晚上"
+    return "深夜"
+
+
 def aggregate_expenses(expenses: list[Expense], tz: ZoneInfo) -> dict[str, Any]:
     total = sum(e.amount_cents for e in expenses)
     by_cat: dict[str, int] = {}
     by_day: dict[str, int] = {}
+    by_slot: dict[str, int] = {}
     for e in expenses:
         cat = e.category or "其他"
         by_cat[cat] = by_cat.get(cat, 0) + e.amount_cents
-        day = datetime.fromtimestamp(e.spent_at, tz).strftime("%m-%d")
+        dt = datetime.fromtimestamp(e.spent_at, tz)
+        day = dt.strftime("%m-%d")
         by_day[day] = by_day.get(day, 0) + e.amount_cents
+        slot = time_slot(dt.hour)
+        by_slot[slot] = by_slot.get(slot, 0) + e.amount_cents
     top = sorted(expenses, key=lambda e: e.amount_cents, reverse=True)[:5]
     return {
         "total": fmt_yuan(total),
@@ -122,4 +146,6 @@ def aggregate_expenses(expenses: list[Expense], tz: ZoneInfo) -> dict[str, Any]:
         "top_items": [{"item": e.item, "amount": fmt_yuan(e.amount_cents), "category": e.category}
                       for e in top],
         "by_day": [{"day": d, "amount": fmt_yuan(v)} for d, v in sorted(by_day.items())],
+        "by_slot": [{"slot": s, "amount": fmt_yuan(v)}
+                    for s, v in sorted(by_slot.items(), key=lambda kv: kv[1], reverse=True)],
     }

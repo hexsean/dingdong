@@ -115,7 +115,8 @@ class ExpenseReporter:
             f"总额：{agg['total']}，共 {agg['count']} 笔\n"
             f"分类金额：{json.dumps(agg['by_category'], ensure_ascii=False)}\n"
             f"最大的几笔：{json.dumps(agg['top_items'], ensure_ascii=False)}\n"
-            f"每天花了多少：{json.dumps(agg['by_day'], ensure_ascii=False)}\n\n"
+            f"每天花了多少：{json.dumps(agg['by_day'], ensure_ascii=False)}\n"
+            f"各时段花了多少：{json.dumps(agg['by_slot'], ensure_ascii=False)}\n\n"
             f"给「{label}」写一段带点吐槽的开销小结。"
         )
         resp = self._llm.chat(
