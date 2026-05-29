@@ -377,6 +377,23 @@ class JobStore:
                 (int(time.time()), result[:4000], job_id),
             )
 
+    def prune_done_jobs(self, owner_user_id: str, account_id: str, keep: int) -> int:
+        """限制"已执行完的一次性任务"留存数量，避免历史无限膨胀。
+
+        已执行完 = date 任务、enabled=0 且 last_run_at 非空（executor 触发成功后标记）。
+        按 last_run_at 倒序保留最近 keep 条，其余删除。返回删除条数。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM jobs WHERE id IN ("
+                "SELECT id FROM jobs "
+                "WHERE owner_user_id = ? AND account_id = ? AND schedule_kind = 'date' "
+                "AND enabled = 0 AND last_run_at IS NOT NULL "
+                "ORDER BY last_run_at DESC LIMIT -1 OFFSET ?)",
+                (owner_user_id, account_id, keep),
+            )
+        return cur.rowcount
+
     def set_context_token(self, job_id: str, context_token: str) -> None:
         with self._lock:
             self._conn.execute(

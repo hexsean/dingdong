@@ -22,6 +22,9 @@ EXECUTOR_SYSTEM_PROMPT = """\
 直接输出消息内容，不要前缀。简洁，中文，注意当前时间。
 """
 
+# 已执行完的一次性任务的留存上限（每个用户）：超出按 last_run_at 倒序裁掉，避免历史无限膨胀。
+DONE_RETENTION = 20
+
 
 class JobExecutor:
     def __init__(
@@ -54,8 +57,9 @@ class JobExecutor:
             self._record_push(job, content)
         if job.schedule_kind == "date":
             if ok:
-                self._store.delete(job.id)
-                log.info("one-shot job %s (%s) cleaned up", job.id, job.name)
+                self._store.update_fields(job.id, enabled=False)
+                self._store.prune_done_jobs(job.owner_user_id, job.account_id, DONE_RETENTION)
+                log.info("one-shot job %s (%s) marked done", job.id, job.name)
             else:
                 log.error("one-shot job %s (%s) send failed; kept for manual retry", job.id, job.name)
 

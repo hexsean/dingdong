@@ -127,7 +127,7 @@ INTENT_SYSTEM_PROMPT = """\
 - 不要自作主张创建用户没要求的任务
 - 创建/修改/删除任务，确认一句话就够
 - 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
-- 一次性(date)任务触发后会从任务列表消失；若对话历史里有「定时任务…已于…触发」的记录，说明它已执行过，不要说没找到或提议重建
+- list_jobs 只返回正在生效的任务；一次性(date)任务执行完后不在其中。要核对某个一次性提醒是否已触发过，用 list_done_jobs 查最近完成记录，或看对话历史里「定时任务…已于…触发」的记录。已执行过就别说没找到或提议重建
 
 长期偏好（称呼与风格）：当用户表达"想怎么称呼你 / 给你起个名"、"希望你怎么称呼TA"、"希望你是什么性格/风格/语气"时，调用 set_profile 记住。只传发生变化的项（会整项覆盖），其余不传保持不变；要恢复默认就把该项设为空字符串。除非用户提起，别主动反复追问这些。
 
@@ -181,6 +181,14 @@ def _job_to_brief(job: Job) -> dict[str, Any]:
     }
 
 
+def _is_done_oneshot(job: Job) -> bool:
+    """一次性任务是否已成功执行完：date 任务触发成功后被标记 enabled=0 且有 last_run_at。
+
+    这类任务默认不出现在 list_jobs（正在生效的任务）里，只能用 list_done_jobs 核对。
+    """
+    return job.schedule_kind == "date" and not job.enabled and job.last_run_at is not None
+
+
 def _merge_adjacent(history: list[dict[str, str]]) -> list[dict[str, str]]:
     """合并相邻同角色消息。
 
@@ -205,7 +213,14 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="list_jobs",
-        description="返回该用户的所有定时任务列表。必须完整展示每个任务的全部字段：名称、目标、计划类型、计划详情、启用状态、下次触发时间。不得省略任何任务或字段。",
+        description="返回该用户【正在生效】的定时任务列表（不含已执行完的一次性任务，后者用 list_done_jobs 查）。"
+                    "必须完整展示每个任务的全部字段：名称、目标、计划类型、计划详情、启用状态、下次触发时间。不得省略任何任务或字段。",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    ToolSpec(
+        name="list_done_jobs",
+        description="查询最近【已执行完成】的一次性任务（仅返回最近若干条，用于核对某个提醒是否已经触发过）。"
+                    "不含正在生效的任务；日常任务列表请用 list_jobs。",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
     ),
     ToolSpec(
@@ -744,6 +759,8 @@ class IntentRouter:
                 return f"{now.strftime('%Y-%m-%d %H:%M:%S %Z')} {weekday}"
             if name == "list_jobs":
                 return self._tool_list_jobs(owner_user_id)
+            if name == "list_done_jobs":
+                return self._tool_list_done_jobs(owner_user_id)
             if name == "create_job":
                 return self._tool_create_job(args, owner_user_id, context_token)
             if name == "update_job":
@@ -770,15 +787,35 @@ class IntentRouter:
 
     def _tool_list_jobs(self, owner_user_id: str) -> str:
         jobs = self._store.list_jobs(owner_user_id=owner_user_id, account_id=self._account_id or None)
-        if not jobs:
-            return _ok({"jobs": []}, note="还没有任务呢，试试发「每天 9 点提醒我喝水」～")
+        active = [j for j in jobs if not _is_done_oneshot(j)]
+        done_count = len(jobs) - len(active)
+        if not active:
+            note = "还没有任务呢，试试发「每天 9 点提醒我喝水」～"
+            if done_count:
+                note = f"当前没有正在生效的任务（另有 {done_count} 条已执行完的一次性任务，可让我帮你核对）。"
+            return _ok({"jobs": []}, note=note)
         briefs = []
-        for j in jobs:
+        for j in active:
             b = _job_to_brief(j)
             nr = self._scheduler.get_next_run(j.id)
             b["next_run_at"] = nr.isoformat() if nr else None
             briefs.append(b)
-        return _ok({"jobs": briefs})
+        payload: dict[str, Any] = {"jobs": briefs}
+        if done_count:
+            payload["done_count"] = done_count
+        return _ok(payload)
+
+    def _tool_list_done_jobs(self, owner_user_id: str) -> str:
+        jobs = self._store.list_jobs(owner_user_id=owner_user_id, account_id=self._account_id or None)
+        done = [j for j in jobs if _is_done_oneshot(j)]
+        done.sort(key=lambda j: j.last_run_at or 0, reverse=True)
+        if not done:
+            return _ok({"done_jobs": []}, note="最近没有已执行完成的一次性任务。")
+        briefs = [{
+            "id": j.id, "name": j.name, "goal": j.goal,
+            "last_run_at": j.last_run_at, "last_result": j.last_result,
+        } for j in done]
+        return _ok({"done_jobs": briefs})
 
     def _tool_create_job(self, args: dict[str, Any], owner_user_id: str, context_token: str) -> str:
         kind = args.get("schedule_kind")
