@@ -127,6 +127,7 @@ INTENT_SYSTEM_PROMPT = """\
 - 不要自作主张创建用户没要求的任务
 - 创建/修改/删除任务，确认一句话就够
 - 展示任务列表时必须完整显示每个任务的全部信息（名称、目标、计划、状态、下次触发），不要省略任何任务或字段
+- 一次性(date)任务触发后会从任务列表消失；若对话历史里有「定时任务…已于…触发」的记录，说明它已执行过，不要说没找到或提议重建
 
 长期偏好（称呼与风格）：当用户表达"想怎么称呼你 / 给你起个名"、"希望你怎么称呼TA"、"希望你是什么性格/风格/语气"时，调用 set_profile 记住。只传发生变化的项（会整项覆盖），其余不传保持不变；要恢复默认就把该项设为空字符串。除非用户提起，别主动反复追问这些。
 
@@ -178,6 +179,22 @@ def _job_to_brief(job: Job) -> dict[str, Any]:
         "schedule_kind": job.schedule_kind, "schedule_value": job.schedule_value,
         "enabled": job.enabled, "last_run_at": job.last_run_at, "last_result": job.last_result,
     }
+
+
+def _merge_adjacent(history: list[dict[str, str]]) -> list[dict[str, str]]:
+    """合并相邻同角色消息。
+
+    主动推送（executor 写入的"已触发"记录）会在两条 assistant 之间多插一条，
+    形成连续同角色；部分 provider 不接受连续同角色消息，这里合并成一条。
+    此处历史内容全是纯文本字符串，合并安全。
+    """
+    merged: list[dict[str, str]] = []
+    for m in history:
+        if merged and merged[-1].get("role") == m.get("role"):
+            merged[-1]["content"] = f"{merged[-1]['content']}\n{m['content']}"
+        else:
+            merged.append(dict(m))
+    return merged
 
 
 TOOL_SPECS: list[ToolSpec] = [
@@ -528,8 +545,9 @@ class IntentRouter:
     def _build_context(self, owner_user_id: str) -> list[dict[str, str]]:
         """Build conversation history within token budget."""
         if not self._context_length:
-            return self._store.get_history(owner_user_id, limit=FALLBACK_HISTORY_LIMIT,
-                                           account_id=self._account_id or None)
+            return _merge_adjacent(self._store.get_history(
+                owner_user_id, limit=FALLBACK_HISTORY_LIMIT,
+                account_id=self._account_id or None))
 
         history = self._store.get_history(owner_user_id, limit=self._history_limit,
                                           account_id=self._account_id or None)
@@ -556,7 +574,7 @@ class IntentRouter:
         while history and history[0].get("role") != "user":
             history = history[1:]
 
-        return history
+        return _merge_adjacent(history)
 
     def _system_prompt(self, owner_user_id: str, is_first: bool = False) -> str:
         prefs = self._store.get_prefs(owner_user_id, account_id=self._account_id)

@@ -50,12 +50,30 @@ class JobExecutor:
         )
         status = "delivered" if ok else "send-failed"
         self._store.record_run(job.id, f"{status}: {content[:400]}")
+        if ok and job.schedule_kind in ("date", "cron"):
+            self._record_push(job, content)
         if job.schedule_kind == "date":
             if ok:
                 self._store.delete(job.id)
                 log.info("one-shot job %s (%s) cleaned up", job.id, job.name)
             else:
                 log.error("one-shot job %s (%s) send failed; kept for manual retry", job.id, job.name)
+
+    def _record_push(self, job: Job, content: str) -> None:
+        """把主动推送写进对话历史，让意图层 LLM 知道这条提醒已经发过。
+
+        否则一次性(date)任务触发成功后会被删库，LLM 在历史里找不到它，
+        会误判成"没建成功"并提议重建。cron 同理记录；interval 跳过(可能高频刷历史)。
+        """
+        now = datetime.now(self._tz)
+        marker = f"[定时任务「{job.name}」已于 {now:%m-%d %H:%M} 触发]"
+        try:
+            self._store.append_message(
+                job.owner_user_id, "assistant", f"{marker}\n{content}",
+                account_id=job.account_id,
+            )
+        except Exception:
+            log.exception("failed to record push to history for job %s", job.id)
 
     def _generate(self, job: Job) -> str:
         now = datetime.now(self._tz)
