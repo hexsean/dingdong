@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import threading
 from datetime import datetime
 from typing import Any
@@ -117,6 +118,9 @@ INTENT_SYSTEM_PROMPT = """\
 用工具管理任务。有 search_web 时可搜索。
 
 严格规则：
+- 用户要你提醒、定时或到点做某事，必须真的调用 create_job 把任务建出来。只回"好的""已设置"之类却没调用工具，是严重错误，绝对禁止。
+- 一条消息里说了多个任务（多个时间点、多件事、或用顿号/分号/换行列出），要给每个任务各调一次 create_job，在同一条回复里一次性全部建好，别只建第一个。
+- 时间或关键信息不全、没法建任务时，简短追问一句补全，别用"好的"敷衍带过。
 - 用户说"删除"就只调 delete_job，不要先 list 再删，直接按名称或 id 删
 - 用户要删多个任务，用 job_ids 数组一次删完，或用 job_id="all" 全删
 - 用户问任务列表，只调 list_jobs，不要创建任何任务
@@ -145,6 +149,27 @@ def split_bubbles(reply: str) -> list[str]:
     if not reply:
         return []
     return [p for p in (s.strip() for s in reply.split(BUBBLE_SEP)) if p]
+
+
+# 一条消息里出现 ≥2 个时间点（"9点""12:30""18时"）时，粗判为多任务。
+_TIME_MENTION_RE = re.compile(r"\d+\s*[:：点時时]")
+
+
+def _looks_multi_task(text: str) -> bool:
+    """粗判用户是否在一条消息里塞了多个任务。
+
+    仅用来决定单个 create_job/update_job 是否走快捷回复（省一次 LLM）：判错只影响快慢、
+    不影响正确性——判多了最多多花一次 LLM 总结，判少了退回原来的行为。
+    顺序型模型（一次只发一个工具调用，如部分国产模型）靠这个才能把多任务建全。
+    """
+    s = (text or "").strip()
+    if not s:
+        return False
+    if "\n" in s or "；" in s or ";" in s:
+        return True
+    if s.count("提醒") >= 2:
+        return True
+    return len(_TIME_MENTION_RE.findall(s)) >= 2
 
 
 def _job_to_brief(job: Job) -> dict[str, Any]:
@@ -442,6 +467,7 @@ class IntentRouter:
                         },
                     })
                 last_user["content"] = content_parts
+        wants_multi = _looks_multi_task(text)
         for round_idx in range(MAX_TOOL_ROUNDS):
             tools = list(TOOL_SPECS)
             if search_available():
@@ -482,7 +508,9 @@ class IntentRouter:
                     needs_llm_summary = True
 
             QUICK_REPLY_TOOLS = {"create_job", "update_job"}
-            if not needs_llm_summary and len(tool_uses) == 1 and tool_uses[0]["name"] in QUICK_REPLY_TOOLS:
+            # 顺序型模型一次只建一个；若像多任务，跳过短路让它把剩下的接着建完。
+            if (not needs_llm_summary and len(tool_uses) == 1
+                    and tool_uses[0]["name"] in QUICK_REPLY_TOOLS and not wants_multi):
                 quick = _quick_reply(tool_uses[0]["name"], tool_results[0]["content"])
                 if quick:
                     self._store.append_message(owner_user_id, "assistant", quick, account_id=self._account_id)
